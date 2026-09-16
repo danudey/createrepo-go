@@ -1,0 +1,8 @@
+# Build output
+/bin/
+# Anchored to the repo root so it ignores a top-level `go build` binary without
+# also matching the cmd/createrepo-go/ source directory.
+/createrepo-go
+
+# createrepo_c temporary working dir
+**/.repodata/
