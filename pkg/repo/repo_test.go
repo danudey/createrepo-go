@@ -45,18 +45,21 @@ func (c *countingBackend) Get(ctx context.Context, p string) (io.ReadCloser, err
 	c.mu.Unlock()
 	return c.inner.Get(ctx, p)
 }
+
 func (c *countingBackend) Stat(ctx context.Context, p string) (*backend.FileInfo, error) {
 	c.mu.Lock()
 	c.stats[class(p)]++
 	c.mu.Unlock()
 	return c.inner.Stat(ctx, p)
 }
+
 func (c *countingBackend) Put(ctx context.Context, p string, r io.Reader, n int64) error {
 	c.mu.Lock()
 	c.puts[class(p)]++
 	c.mu.Unlock()
 	return c.inner.Put(ctx, p, r, n)
 }
+
 func (c *countingBackend) Delete(ctx context.Context, p string) error {
 	c.mu.Lock()
 	c.deletes[class(p)]++

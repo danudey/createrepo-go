@@ -62,6 +62,10 @@ func (t RPMTool) verifyPayload(path string) (detail string, ok bool, err error) 
 	//   Payload SHA256 digest: OK
 	// A failure prints "NOT OK" / "BAD".
 	lower := strings.ToLower(text)
+	// A non-zero exit means the package failed verification, which is this
+	// function's result (ok=false), not an error. The error return is reserved
+	// for being unable to run the check at all.
+	//nolint:nilerr // runErr is the answer, not a failure to produce one.
 	if runErr != nil || strings.Contains(lower, "not ok") || strings.Contains(lower, "bad") {
 		return condenseDigestLines(text), false, nil
 	}

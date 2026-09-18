@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"testing"
 )
 
 // rpmSet holds the RPM fixtures used by the scenarios. The two base packages
@@ -26,8 +25,10 @@ type rpmSet struct {
 	depLibNew string // deplib-2.0-1.noarch.rpm
 }
 
-const refRPMDir = "../../reference/rpmbuild/RPMS"
-const specDir = "../../reference/specs"
+const (
+	refRPMDir = "../../reference/rpmbuild/RPMS"
+	specDir   = "../../reference/specs"
+)
 
 // haveNewer reports whether the bumped hello build is available.
 func (r rpmSet) haveNewer() bool { return r.helloNewer != "" }
@@ -133,10 +134,4 @@ func depSpec(name, version, extra string) string {
 		extra + "\n" +
 		"%description\n" + name + " dependency fixture\n" +
 		"%files\n"
-}
-
-// rpmBase returns the basename a package gets under the repo root (no prefix).
-func rpmBase(t *testing.T, path string) string {
-	t.Helper()
-	return filepath.Base(path)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -191,7 +192,7 @@ func (r *Repo) verifyPackage(ctx context.Context, p *repodata.Package, opt Verif
 
 	fi, err := r.be.Stat(ctx, p.Location)
 	switch {
-	case err == backend.ErrNotExist:
+	case errors.Is(err, backend.ErrNotExist):
 		v.fail(p, "the RPM the metadata references is missing")
 		return v
 	case err != nil:
@@ -215,7 +216,7 @@ func (r *Repo) verifyPackage(ctx context.Context, p *repodata.Package, opt Verif
 		hasher := r.be.(backend.RemoteHasher)
 		sum, ok, err := hasher.Hash(ctx, p.Location, r.opt.checksumType())
 		switch {
-		case err != nil && err != backend.ErrNotExist:
+		case err != nil && !errors.Is(err, backend.ErrNotExist):
 			v.fail(p, "checksum could not be computed: "+err.Error())
 			return v
 		case ok:
@@ -234,7 +235,7 @@ func (r *Repo) verifyPackage(ctx context.Context, p *repodata.Package, opt Verif
 		// honestly when there is nothing to go on.
 		if hasher, isHasher := r.be.(backend.RemoteHasher); isHasher {
 			sum, ok, err := hasher.Hash(ctx, p.Location, r.opt.checksumType())
-			if err != nil && err != backend.ErrNotExist {
+			if err != nil && !errors.Is(err, backend.ErrNotExist) {
 				v.fail(p, "recorded checksum could not be read: "+err.Error())
 				return v
 			}

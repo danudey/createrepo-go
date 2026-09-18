@@ -19,11 +19,11 @@ type httpBackend struct {
 	client *http.Client
 }
 
-func newHTTP(location string) (*httpBackend, error) {
+func newHTTP(location string) *httpBackend {
 	if !strings.HasSuffix(location, "/") {
 		location += "/"
 	}
-	return &httpBackend{base: location, client: http.DefaultClient}, nil
+	return &httpBackend{base: location, client: http.DefaultClient}
 }
 
 func (h *httpBackend) url(relpath string) string {

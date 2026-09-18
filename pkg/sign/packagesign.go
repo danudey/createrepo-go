@@ -61,6 +61,8 @@ func NewPackageSignerKeyFile(keyFile, passphrase string) (*PackageSigner, error)
 	if err != nil {
 		return nil, err
 	}
+	// #nosec G302 -- 0700 on a directory, where the execute bit is required
+	// to traverse it. gosec applies its file rule of 0600 regardless.
 	if err := os.Chmod(home, 0o700); err != nil {
 		os.RemoveAll(home)
 		return nil, err
@@ -70,7 +72,7 @@ func NewPackageSignerKeyFile(keyFile, passphrase string) (*PackageSigner, error)
 	imp := exec.Command(gpgBinary(), "--homedir", home, "--batch", "--yes", "--import", keyFile)
 	if out, err := imp.CombinedOutput(); err != nil {
 		cleanup()
-		return nil, fmt.Errorf("import key: %v: %s", err, out)
+		return nil, fmt.Errorf("import key: %w: %s", err, out)
 	}
 	fpr, err := firstSecretKeyFingerprint(home)
 	if err != nil {
@@ -111,7 +113,7 @@ func (s *PackageSigner) SignFile(src string) (string, func(), error) {
 		}
 		if out, err := del.CombinedOutput(); err != nil {
 			cleanup()
-			return "", nil, fmt.Errorf("rpmsign --delsign %s: %v: %s", src, err, out)
+			return "", nil, fmt.Errorf("rpmsign --delsign %s: %w: %s", src, err, out)
 		}
 	}
 
@@ -143,7 +145,7 @@ func (s *PackageSigner) SignFile(src string) (string, func(), error) {
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		cleanup()
-		return "", nil, fmt.Errorf("rpmsign %s: %v: %s", src, err, out)
+		return "", nil, fmt.Errorf("rpmsign %s: %w: %s", src, err, out)
 	}
 	return dst, cleanup, nil
 }

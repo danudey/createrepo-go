@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -65,7 +66,7 @@ func (r *Repo) RefreshFromPackages(ctx context.Context, opt RefreshOptions) (*Re
 
 	for _, old := range r.idx.Packages() {
 		local, cleanup, size, err := r.readablePath(ctx, old.Location)
-		if err == backend.ErrNotExist {
+		if errors.Is(err, backend.ErrNotExist) {
 			res.Missing = append(res.Missing, old.Location)
 			continue
 		}

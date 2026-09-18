@@ -56,7 +56,7 @@ func (g *gcsBackend) Stat(ctx context.Context, relpath string) (*FileInfo, error
 	fi := &FileInfo{Size: attrs.Size}
 	if sum := attrs.Metadata[metaSHA256]; sum != "" {
 		fi.Checksum = sum
-		fi.ChecksumType = "sha256"
+		fi.ChecksumType = AlgoSHA256
 	}
 	return fi, nil
 }
@@ -135,7 +135,7 @@ func (g *gcsBackend) HashesContent() bool { return false }
 
 // Hash implements RemoteHasher from the stored sha256 metadata.
 func (g *gcsBackend) Hash(ctx context.Context, relpath, algo string) (string, bool, error) {
-	if algo != "sha256" {
+	if algo != AlgoSHA256 {
 		return "", false, nil
 	}
 	fi, err := g.Stat(ctx, relpath)

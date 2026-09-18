@@ -93,7 +93,7 @@ Examples:
 				// keep level-derived default
 			case "latest":
 				latestOnly = true
-			case "all":
+			case versionsAll:
 				latestOnly = false
 			default:
 				return fmt.Errorf("invalid --versions %q (want latest|all)", cf.versions)
@@ -197,11 +197,19 @@ func statusRank(s repocheck.Status) int {
 	}
 }
 
+// versionsAll is the --versions value meaning "every version"; archAll is the
+// --arch value meaning "the host architecture only". They share a spelling but
+// not a meaning.
+const (
+	versionsAll = "all"
+	archAll     = "all"
+)
+
 func versionsLabel(latestOnly bool) string {
 	if latestOnly {
 		return "latest"
 	}
-	return "all"
+	return versionsAll
 }
 
 // resolveArches turns the --arch flag into a concrete list. Empty or "all"
@@ -210,7 +218,7 @@ func resolveArches(flagVal string) []string {
 	switch strings.ToLower(strings.TrimSpace(flagVal)) {
 	case "any":
 		return nil
-	case "", "all":
+	case "", archAll:
 		return []string{hostArch()}
 	default:
 		return splitList(flagVal)

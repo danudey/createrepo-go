@@ -52,6 +52,8 @@ func (l *local) Stat(_ context.Context, relpath string) (*FileInfo, error) {
 
 func (l *local) Put(_ context.Context, relpath string, r io.Reader, _ int64) error {
 	dst := l.path(relpath)
+	// #nosec G301 -- repository directories are served to clients over HTTP
+	// and must stay world-readable; 0750 would break the published repo.
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
@@ -134,7 +136,7 @@ func (l *local) HashesContent() bool { return true }
 
 // Hash implements RemoteHasher by hashing the local file.
 func (l *local) Hash(_ context.Context, relpath, algo string) (string, bool, error) {
-	if algo != "sha256" {
+	if algo != AlgoSHA256 {
 		return "", false, fmt.Errorf("local: unsupported hash %q", algo)
 	}
 	f, err := os.Open(l.path(relpath))

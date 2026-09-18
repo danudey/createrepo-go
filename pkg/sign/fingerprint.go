@@ -56,7 +56,7 @@ func keyringFingerprint(keyID string) (string, error) {
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("gpg list-keys %s: %v: %s", keyID, err, strings.TrimSpace(errBuf.String()))
+		return "", fmt.Errorf("gpg list-keys %s: %w: %s", keyID, err, strings.TrimSpace(errBuf.String()))
 	}
 	sc := bufio.NewScanner(&out)
 	for sc.Scan() {

@@ -135,11 +135,7 @@ The cleanup flags require a backend that can list its contents (not plain HTTP).
 			// Destructive from here on (deletes and possibly a large download):
 			// confirm unless the operator opted out.
 			if !assumeYes {
-				ok, err := promptYesNo(cmd, "Proceed with these changes?")
-				if err != nil {
-					return err
-				}
-				if !ok {
+				if !promptYesNo(cmd, "Proceed with these changes?") {
 					fmt.Fprintln(cmd.OutOrStdout(), "aborted; no changes made")
 					return nil
 				}
@@ -372,18 +368,18 @@ func printRebuildReport(cmd *cobra.Command, rep rebuildReport) {
 
 // promptYesNo asks question on stdout and reads a line from the command's input,
 // returning true only for an explicit yes. EOF or a blank line means no.
-func promptYesNo(cmd *cobra.Command, question string) (bool, error) {
+func promptYesNo(cmd *cobra.Command, question string) bool {
 	fmt.Fprintf(cmd.OutOrStdout(), "%s [y/N] ", question)
 	reader := bufio.NewReader(cmd.InOrStdin())
 	line, err := reader.ReadString('\n')
 	if err != nil && line == "" {
-		return false, nil // EOF with no input: treat as "no"
+		return false // EOF with no input: treat as "no"
 	}
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
-		return true, nil
+		return true
 	default:
-		return false, nil
+		return false
 	}
 }
 

@@ -20,8 +20,8 @@ import (
 // regenerated, so the destination is byte-identical to the source and any
 // detached repomd.xml signature it carries stays valid.
 func copyExact(cmd *cobra.Command, src *repo.Repo, srcLoc string, srcCfg *repoconfig.Config, srcSig []byte,
-	dstBE backend.Backend, dstLoc string, dstExists bool, cf *copyFlags, verifier *sign.Verifier) error {
-
+	dstBE backend.Backend, dstLoc string, dstExists bool, cf *copyFlags, verifier *sign.Verifier,
+) error {
 	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 	defer closeBackend(dstBE)
 
@@ -39,11 +39,7 @@ func copyExact(cmd *cobra.Command, src *repo.Repo, srcLoc string, srcCfg *repoco
 	if prune {
 		fmt.Fprintf(out, "  --overwrite: files at the destination that the source does not have will be deleted\n")
 		if !cf.assumeYes && !gf.dryRun {
-			ok, err := promptYesNo(cmd, "Proceed?")
-			if err != nil {
-				return err
-			}
-			if !ok {
+			if !promptYesNo(cmd, "Proceed?") {
 				fmt.Fprintln(out, "aborted; no changes made")
 				return nil
 			}
@@ -52,7 +48,7 @@ func copyExact(cmd *cobra.Command, src *repo.Repo, srcLoc string, srcCfg *repoco
 
 	prefix := ""
 	if gf.dryRun {
-		prefix = "[dry-run] "
+		prefix = dryRunPrefix
 	}
 	stats, err := repo.CopyExact(ctx(cmd), src.Backend(), dstBE, objs, repo.CopyOptions{
 		DryRun: gf.dryRun,
@@ -159,7 +155,8 @@ func copyRebuilding(cmd *cobra.Command, run copyRun) error {
 	// so a signed source may only be transformed if the copy gets a signature
 	// of its own.
 	keyGiven := gf.gpgKey != "" || gf.gpgKeyID != ""
-	if run.sourceSigned && !(gf.signMetadata && keyGiven) {
+	signingCopy := gf.signMetadata && keyGiven
+	if run.sourceSigned && !signingCopy {
 		return fmt.Errorf("this copy rebuilds the metadata (%s), which invalidates the signature the source carries; "+
 			"re-sign the copy with --sign-metadata and --gpg-key/--gpg-key-id, or copy the repository unchanged",
 			strings.Join(transformReasons(cmd, run), ", "))
@@ -177,11 +174,7 @@ func copyRebuilding(cmd *cobra.Command, run copyRun) error {
 		if run.dstExists && !cf.assumeYes && !gf.dryRun {
 			fmt.Fprintf(run.out, "--overwrite: the %d package(s) already at %s are dropped, and any RPM the new metadata does not reference is deleted\n",
 				existing, run.dstLoc)
-			ok, err := promptYesNo(cmd, "Proceed?")
-			if err != nil {
-				return err
-			}
-			if !ok {
+			if !promptYesNo(cmd, "Proceed?") {
 				fmt.Fprintln(run.out, "aborted; no changes made")
 				return nil
 			}
@@ -196,7 +189,7 @@ func copyRebuilding(cmd *cobra.Command, run copyRun) error {
 
 	prefix := ""
 	if gf.dryRun {
-		prefix = "[dry-run] "
+		prefix = dryRunPrefix
 	}
 	fmt.Fprintf(run.out, "Copy %s -> %s (rebuilding metadata, %d package(s))\n", run.srcLoc, run.dstLoc, len(run.selected))
 

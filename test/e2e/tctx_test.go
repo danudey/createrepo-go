@@ -63,6 +63,7 @@ func (c *tctx) cliErr(args ...string) cliResult {
 // --- repository convenience operations --------------------------------------
 
 func (c *tctx) create() cliResult { return c.cli("create", c.repo) }
+
 func (c *tctx) add(rpms ...string) cliResult {
 	return c.cli(append([]string{"add", c.repo}, rpms...)...)
 }

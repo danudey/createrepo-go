@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 
@@ -63,7 +64,7 @@ type Config struct {
 // defaults".
 func Load(ctx context.Context, be backend.Backend) (*Config, error) {
 	rc, err := be.Get(ctx, Path)
-	if err == backend.ErrNotExist {
+	if errors.Is(err, backend.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {

@@ -267,7 +267,7 @@ func (s *s3Backend) Stat(ctx context.Context, relpath string) (*FileInfo, error)
 	}
 	if sum, ok := out.Metadata[metaSHA256]; ok && sum != "" {
 		fi.Checksum = sum
-		fi.ChecksumType = "sha256"
+		fi.ChecksumType = AlgoSHA256
 	}
 	return fi, nil
 }
@@ -395,7 +395,7 @@ func (s *s3Backend) HashesContent() bool { return false }
 // Hash implements RemoteHasher using the sha256 we stored in object metadata at
 // upload time. Returns ("", false, nil) when the object predates our metadata.
 func (s *s3Backend) Hash(ctx context.Context, relpath, algo string) (string, bool, error) {
-	if algo != "sha256" {
+	if algo != AlgoSHA256 {
 		return "", false, nil
 	}
 	fi, err := s.Stat(ctx, relpath)

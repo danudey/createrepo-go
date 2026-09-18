@@ -6,8 +6,10 @@ import (
 )
 
 func fpkg(name, arch, ver string) *Package {
-	return &Package{Name: name, Arch: arch, Version: ver, Release: "1",
-		PkgID: name + "-" + ver + "." + arch, Location: "Packages/" + name + "-" + ver + "-1." + arch + ".rpm"}
+	return &Package{
+		Name: name, Arch: arch, Version: ver, Release: "1",
+		PkgID: name + "-" + ver + "." + arch, Location: "Packages/" + name + "-" + ver + "-1." + arch + ".rpm",
+	}
 }
 
 // sample is a small repository covering every kind and two versions of one
@@ -134,8 +136,11 @@ func TestFilterIncludeExcludePatterns(t *testing.T) {
 		wantAll []string
 	}{
 		{"bare name", Filter{Include: []string{"hello"}}, []string{"hello-2.10-1.noarch"}},
-		{"name glob", Filter{Include: []string{"libfoo-debug*"}},
-			[]string{"libfoo-debuginfo-1.3.0-1.x86_64", "libfoo-debugsource-1.3.0-1.x86_64"}},
+		{
+			"name glob",
+			Filter{Include: []string{"libfoo-debug*"}},
+			[]string{"libfoo-debuginfo-1.3.0-1.x86_64", "libfoo-debugsource-1.3.0-1.x86_64"},
+		},
 		{"name-version", Filter{Include: []string{"libfoo-1.2.0"}}, []string{"libfoo-1.2.0-1.x86_64"}},
 		{"version glob", Filter{Include: []string{"libfoo-1.2.*"}}, []string{"libfoo-1.2.0-1.x86_64"}},
 	}

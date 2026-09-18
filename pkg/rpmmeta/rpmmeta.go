@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -116,8 +117,8 @@ func convert(pkg *rpm.Package, opt Options) *repodata.Package {
 		Packager:    pkg.Packager(),
 		URL:         pkg.URL(),
 		BuildTime:   pkg.BuildTime().Unix(),
-		SizeInstall: int64(pkg.Size()),
-		SizeArchive: int64(pkg.ArchiveSize()),
+		SizeInstall: clampInt64(pkg.Size()),
+		SizeArchive: clampInt64(pkg.ArchiveSize()),
 		License:     pkg.License(),
 		Vendor:      pkg.Vendor(),
 		Group:       firstOr(pkg.Groups(), ""),
@@ -133,6 +134,16 @@ func convert(pkg *rpm.Package, opt Options) *repodata.Package {
 		Changelogs:  changelogs(pkg, opt.ChangelogLimit),
 	}
 	return p
+}
+
+// clampInt64 converts a size reported by the rpm header to the signed type
+// rpm-md uses. A real package never approaches the limit, but the header is
+// attacker-controlled and a bare conversion would wrap to a negative size.
+func clampInt64(v uint64) int64 {
+	if v > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(v)
 }
 
 func firstOr(s []string, def string) string {

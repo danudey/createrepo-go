@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -145,10 +146,7 @@ func runCopy(cmd *cobra.Command, srcLoc, dstLoc string, cf *copyFlags) error {
 	}
 	defer src.Close()
 
-	keyrings, releaseKeys, err := verificationKeyrings(cmd, srcCfg, cf.skipVerify)
-	if err != nil {
-		return err
-	}
+	keyrings, releaseKeys := verificationKeyrings(cmd, srcCfg, cf.skipVerify)
 	defer releaseKeys()
 
 	srcSig, err := src.MetadataSignature(ctx(cmd))
@@ -278,10 +276,10 @@ func (cf *copyFlags) filter() (repodata.Filter, error) {
 // repoExists reports whether a repository has already been published at be.
 func repoExists(cmd *cobra.Command, be backend.Backend) (bool, error) {
 	_, err := be.Stat(ctx(cmd), "repodata/repomd.xml")
-	switch err {
-	case nil:
+	switch {
+	case err == nil:
 		return true, nil
-	case backend.ErrNotExist:
+	case errors.Is(err, backend.ErrNotExist):
 		return false, nil
 	default:
 		return false, err
@@ -293,25 +291,25 @@ func repoExists(cmd *cobra.Command, be backend.Backend) (bool, error) {
 // repository's own signing key, exported from the local GnuPG keyring by the
 // fingerprint recorded in its config. A key that cannot be resolved is a
 // warning, not an error — verification is then simply not possible.
-func verificationKeyrings(cmd *cobra.Command, srcCfg *repoconfig.Config, skip bool) ([]string, func(), error) {
+func verificationKeyrings(cmd *cobra.Command, srcCfg *repoconfig.Config, skip bool) ([]string, func()) {
 	noop := func() {}
 	if skip {
-		return nil, noop, nil
+		return nil, noop
 	}
 	if len(gf.keyrings) > 0 {
-		return gf.keyrings, noop, nil
+		return gf.keyrings, noop
 	}
 	if srcCfg == nil || srcCfg.GPGKeyID == "" {
-		return nil, noop, nil
+		return nil, noop
 	}
 	path, cleanup, err := sign.ExportPublicKey(srcCfg.GPGKeyID)
 	if err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "warning: the source repository is signed with %s but that key is not available locally (%v); signatures will not be verified. Pass --keyring to supply it.\n",
 			srcCfg.GPGKeyID, err)
-		return nil, noop, nil
+		return nil, noop
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "verifying against the source's recorded signing key %s\n", srcCfg.GPGKeyID)
-	return []string{path}, cleanup, nil
+	return []string{path}, cleanup
 }
 
 // verifySourceMetadata checks the source's detached repomd.xml signature and

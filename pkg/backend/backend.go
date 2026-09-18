@@ -41,10 +41,15 @@ type Backend interface {
 	String() string
 }
 
+// AlgoSHA256 names the only content hash the backends implement. It is the
+// algorithm argument to RemoteHasher.Hash and the value reported in
+// FileInfo.ChecksumType.
+const AlgoSHA256 = "sha256"
+
 // RemoteHasher is an optional capability: a backend that can compute (or look
 // up) the checksum of a stored object without transferring its contents. This
 // lets the repository verify that an already-present RPM matches a local file
-// without downloading it. algo is a hash name such as "sha256".
+// without downloading it. algo is a hash name such as AlgoSHA256.
 type RemoteHasher interface {
 	// Hash returns the object's checksum and true, or ("", false, nil) if the
 	// checksum cannot be determined without downloading.
@@ -155,7 +160,7 @@ func Open(ctx context.Context, location string) (Backend, error) {
 	case "gs", "gcs":
 		return newGCS(ctx, location)
 	case "http", "https":
-		return newHTTP(location)
+		return newHTTP(location), nil
 	default:
 		return nil, fmt.Errorf("backend: unsupported scheme %q in %q", scheme, location)
 	}

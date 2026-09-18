@@ -192,11 +192,17 @@ func packageSigner() (*sign.PackageSigner, func(), error) {
 }
 
 // signatureFormat parses and validates the --signature-format flag.
+// The accepted --signature-format values.
+const (
+	sigFormatV4      = "v4"
+	sigFormatOpenPGP = "openpgp"
+)
+
 func signatureFormat() (sign.SignatureFormat, error) {
 	switch gf.signatureFormat {
-	case "", "v4":
+	case "", sigFormatV4:
 		return sign.SigV4, nil
-	case "openpgp":
+	case sigFormatOpenPGP:
 		return sign.SigOpenPGP, nil
 	default:
 		return "", fmt.Errorf("invalid --signature-format %q (use v4 or openpgp)", gf.signatureFormat)

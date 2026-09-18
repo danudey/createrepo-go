@@ -17,8 +17,8 @@ package repocheck
 import (
 	"compress/bzip2"
 	"compress/gzip"
-	"crypto/md5"
-	"crypto/sha1"
+	"crypto/md5"  // #nosec G501 -- a checksum type repomd.xml may name; see newHasher.
+	"crypto/sha1" // #nosec G505 -- likewise.
 	"crypto/sha256"
 	"crypto/sha512"
 	"fmt"
@@ -41,10 +41,14 @@ func newHasher(typ string) (h hash.Hash, supported bool) {
 	case "sha512", "sha2-512":
 		return sha512.New(), true
 	case "sha1", "sha":
+		// #nosec G401 -- the algorithm is dictated by the repository metadata,
+		// not chosen here. Old repositories still publish sha1 and md5 sums,
+		// and refusing to compute them would mean refusing to check the repo.
 		return sha1.New(), true
 	case "sha384":
 		return sha512.New384(), true
 	case "md5":
+		// #nosec G401 -- see the sha1 case above.
 		return md5.New(), true
 	default:
 		return sha256.New(), false

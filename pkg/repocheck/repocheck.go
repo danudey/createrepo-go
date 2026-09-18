@@ -92,7 +92,7 @@ type Target struct {
 // no repositories to check); per-artifact failures are reported via the
 // results' Status, not the error.
 func Run(ctx context.Context, opts Options) (results []Result, warnings []string, err error) {
-	sections, err := loadRepoInput(opts.Input, fetchOverHTTP(opts.Timeout))
+	sections, err := loadRepoInput(opts.Input, fetchOverHTTP(ctx, opts.Timeout))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -123,8 +123,10 @@ func Run(ctx context.Context, opts Options) (results []Result, warnings []string
 		}
 		be, err := backend.Open(ctx, t.baseURL)
 		if err != nil {
-			ck.add(Result{Target: t.label, Kind: "repository", Loc: t.baseURL, Status: StatusFail,
-				Detail: "cannot open repository: " + err.Error()})
+			ck.add(Result{
+				Target: t.label, Kind: "repository", Loc: t.baseURL, Status: StatusFail,
+				Detail: "cannot open repository: " + err.Error(),
+			})
 			continue
 		}
 		ck.checkTarget(ctx, be, t.label)
@@ -137,10 +139,10 @@ func Run(ctx context.Context, opts Options) (results []Result, warnings []string
 }
 
 // fetchOverHTTP returns a function that downloads a .repo file over HTTP(S).
-func fetchOverHTTP(timeout time.Duration) func(string) ([]byte, error) {
+func fetchOverHTTP(ctx context.Context, timeout time.Duration) func(string) ([]byte, error) {
 	client := &http.Client{Timeout: timeout}
 	return func(rawURL string) ([]byte, error) {
-		req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 		if err != nil {
 			return nil, err
 		}

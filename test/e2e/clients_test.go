@@ -50,11 +50,9 @@ func TestE2EClients(t *testing.T) {
 		&gcsHarness{},
 	}
 	for _, h := range harnesses {
-		h := h
 		t.Run(h.Name(), func(t *testing.T) {
 			h.Start(t) // may t.Skip
 			for _, ap := range almaProfiles {
-				ap := ap
 				t.Run("alma"+ap.ver, func(t *testing.T) {
 					image := "almalinux:" + ap.ver
 					ensureImage(t, rt, image)
@@ -108,7 +106,6 @@ func TestE2EClientUpdate(t *testing.T) {
 	t.Run(h.Name(), func(t *testing.T) {
 		h.Start(t)
 		for _, ap := range almaProfiles {
-			ap := ap
 			t.Run("alma"+ap.ver, func(t *testing.T) {
 				image := "almalinux:" + ap.ver
 				ensureImage(t, rt, image)

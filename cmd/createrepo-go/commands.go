@@ -202,11 +202,15 @@ func verifySummary(res *repo.VerifyResult) string {
 }
 
 // printPlan renders a commit Plan to the command's output.
+// dryRunPrefix marks every line of output that describes an action the run
+// did not actually take.
+const dryRunPrefix = "[dry-run] "
+
 func printPlan(cmd *cobra.Command, plan *repo.Plan, dryRun bool) {
 	out := cmd.OutOrStdout()
 	prefix := ""
 	if dryRun {
-		prefix = "[dry-run] "
+		prefix = dryRunPrefix
 	}
 	for _, a := range plan.Uploads {
 		fmt.Fprintf(out, "%supload  %s (%d bytes) — %s\n", prefix, a.Location, a.Size, a.Reason)

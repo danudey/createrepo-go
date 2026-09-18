@@ -104,6 +104,10 @@ func SameSigner(a, b []string) bool {
 	return false
 }
 
+// gpgRecordFpr is the record type of a fingerprint line in gpg's
+// --with-colons output; field 10 holds the fingerprint itself.
+const gpgRecordFpr = "fpr"
+
 // KeyAndSubkeyIDs expands a key identifier into every long key id that can
 // issue a signature on its behalf: the primary key's and each subkey's. A
 // repository config records only the primary fingerprint, but gpg signs with a
@@ -122,7 +126,7 @@ func KeyAndSubkeyIDs(keyID string) []string {
 	ids := []string{self}
 	for _, line := range strings.Split(out.String(), "\n") {
 		fields := strings.Split(line, ":")
-		if len(fields) > 9 && fields[0] == "fpr" {
+		if len(fields) > 9 && fields[0] == gpgRecordFpr {
 			if id := longKeyID(fields[9]); id != "" && !seen[id] {
 				seen[id] = true
 				ids = append(ids, id)
@@ -199,7 +203,7 @@ func ExportPublicKey(keyID string) (path string, cleanup func(), err error) {
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
 	if err := cmd.Run(); err != nil {
-		return "", noop, fmt.Errorf("gpg --export %s: %v: %s", keyID, err, strings.TrimSpace(errBuf.String()))
+		return "", noop, fmt.Errorf("gpg --export %s: %w: %s", keyID, err, strings.TrimSpace(errBuf.String()))
 	}
 	if out.Len() == 0 {
 		return "", noop, fmt.Errorf("key %s is not in the local GnuPG keyring", keyID)

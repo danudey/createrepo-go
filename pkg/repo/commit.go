@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -265,7 +266,7 @@ func (r *Repo) buildPlan(ctx context.Context, pkgs []*repodata.Package) (*Plan, 
 		fi, err := r.be.Stat(ctx, href)
 		missing := false
 		switch {
-		case err == backend.ErrNotExist:
+		case errors.Is(err, backend.ErrNotExist):
 			missing = true
 			action.Upload = true
 			action.Reason = "not present"
@@ -322,7 +323,7 @@ func (r *Repo) buildPlan(ctx context.Context, pkgs []*repodata.Package) (*Plan, 
 		if _, err := r.be.Stat(ctx, p.Location); err == nil {
 			plan.Skipped = append(plan.Skipped, UploadAction{Location: p.Location, Size: p.SizePackage, Reason: "present at new location"})
 			continue
-		} else if err != backend.ErrNotExist {
+		} else if !errors.Is(err, backend.ErrNotExist) {
 			return nil, fmt.Errorf("stat %s: %w", p.Location, err)
 		}
 		if canCopy {
@@ -359,7 +360,7 @@ func (r *Repo) resolveExisting(ctx context.Context, href string, pkg *repodata.P
 	}
 	if hasher != nil {
 		sum, ok, herr := hasher.Hash(ctx, href, r.opt.checksumType())
-		if herr != nil && herr != backend.ErrNotExist {
+		if herr != nil && !errors.Is(herr, backend.ErrNotExist) {
 			return false, "", fmt.Errorf("remote hash %s: %w", href, herr)
 		}
 		if ok {

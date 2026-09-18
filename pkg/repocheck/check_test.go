@@ -112,10 +112,14 @@ func TestCheckDependencies(t *testing.T) {
 	be := depOnlyBackend{}
 
 	// A pins libdep = 1.0, but only libdep-2.0 is present: a broken intra-repo dep.
-	app := &repodata.Package{Name: "app", Arch: "noarch", Version: "1.0", Release: "1", Location: "Packages/app.rpm",
-		Requires: []repodata.Entry{{Name: "libdep", Flags: "EQ", Ver: "1.0"}}}
-	lib2 := &repodata.Package{Name: "libdep", Arch: "noarch", Version: "2.0", Release: "1",
-		Provides: []repodata.Entry{{Name: "libdep", Flags: "EQ", Ver: "2.0", Rel: "1"}}}
+	app := &repodata.Package{
+		Name: "app", Arch: "noarch", Version: "1.0", Release: "1", Location: "Packages/app.rpm",
+		Requires: []repodata.Entry{{Name: "libdep", Flags: "EQ", Ver: "1.0"}},
+	}
+	lib2 := &repodata.Package{
+		Name: "libdep", Arch: "noarch", Version: "2.0", Release: "1",
+		Provides: []repodata.Entry{{Name: "libdep", Flags: "EQ", Ver: "2.0", Rel: "1"}},
+	}
 
 	ck := newChecker(Config{}, RPMTool{}, nil)
 	ck.checkDependencies("repo", be, []*repodata.Package{app, lib2})
@@ -125,8 +129,10 @@ func TestCheckDependencies(t *testing.T) {
 	}
 
 	// Add libdep-1.0 and the graph is satisfied: a single OK summary.
-	lib1 := &repodata.Package{Name: "libdep", Arch: "noarch", Version: "1.0", Release: "1",
-		Provides: []repodata.Entry{{Name: "libdep", Flags: "EQ", Ver: "1.0", Rel: "1"}}}
+	lib1 := &repodata.Package{
+		Name: "libdep", Arch: "noarch", Version: "1.0", Release: "1",
+		Provides: []repodata.Entry{{Name: "libdep", Flags: "EQ", Ver: "1.0", Rel: "1"}},
+	}
 	ck = newChecker(Config{}, RPMTool{}, nil)
 	ck.checkDependencies("repo", be, []*repodata.Package{app, lib1, lib2})
 	res = ck.Results()

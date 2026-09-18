@@ -62,11 +62,9 @@ func TestE2E(t *testing.T) {
 		&gcsHarness{},
 	}
 	for _, h := range harnesses {
-		h := h
 		t.Run(h.Name(), func(t *testing.T) {
 			h.Start(t) // may t.Skip
 			for _, sc := range scenarios {
-				sc := sc
 				t.Run(sc.name, func(t *testing.T) {
 					if sc.needsNewer && !gRPMs.haveNewer() {
 						t.Skip("rpmbuild unavailable; no newer hello build for this scenario")

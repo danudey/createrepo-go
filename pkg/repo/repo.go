@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -125,7 +126,7 @@ func OpenWith(ctx context.Context, be backend.Backend, opts Options) (*Repo, err
 		original: map[string]string{},
 	}
 	if err := r.load(ctx); err != nil {
-		r.Close()
+		_ = r.Close()
 		return nil, err
 	}
 	return r, nil
@@ -143,7 +144,7 @@ func (r *Repo) Close() error {
 // no repomd.xml is treated as empty (only allowed when opts.Create is set).
 func (r *Repo) load(ctx context.Context) error {
 	data, err := r.getAll(ctx, repomdPath)
-	if err == backend.ErrNotExist {
+	if errors.Is(err, backend.ErrNotExist) {
 		if !r.opt.Create {
 			return fmt.Errorf("no repository at %s (use create to initialize)", r.be)
 		}

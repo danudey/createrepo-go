@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -33,6 +34,7 @@ import (
 // Level selects how deep the checks go. Each level is cumulative.
 type Level int
 
+// The available check levels, in increasing order of cost.
 const (
 	LevelMetadata Level = iota // repomd + index files present and valid
 	LevelHead                  // + packages exist with the correct size
@@ -69,6 +71,8 @@ func ParseLevel(s string) (Level, error) {
 // Status is the outcome of a single check.
 type Status string
 
+// The outcomes a single check can report. Only StatusFail means the
+// repository is broken; StatusWarn and StatusSkip leave the run successful.
 const (
 	StatusOK   Status = "OK"
 	StatusFail Status = "FAIL"
@@ -155,7 +159,7 @@ func (ck *checker) checkTarget(ctx context.Context, be backend.Backend, label st
 	repomdLoc := joinLoc(be.String(), repomdPath)
 
 	raw, err := ck.getAll(ctx, be, repomdPath)
-	if err == backend.ErrNotExist {
+	if errors.Is(err, backend.ErrNotExist) {
 		ck.add(Result{Target: label, Kind: "repomd.xml", Loc: repomdLoc, Status: StatusFail, Detail: "no repodata/repomd.xml (not a repository?)"})
 		return
 	}
@@ -168,8 +172,10 @@ func (ck *checker) checkTarget(ctx context.Context, be backend.Backend, label st
 		ck.add(Result{Target: label, Kind: "repomd.xml", Loc: repomdLoc, Status: StatusFail, Detail: err.Error()})
 		return
 	}
-	ck.add(Result{Target: label, Kind: "repomd.xml", Loc: repomdLoc, Status: StatusOK,
-		Detail: fmt.Sprintf("revision %s, %d metadata files", md.Revision, len(md.Data))})
+	ck.add(Result{
+		Target: label, Kind: "repomd.xml", Loc: repomdLoc, Status: StatusOK,
+		Detail: fmt.Sprintf("revision %s, %d metadata files", md.Revision, len(md.Data)),
+	})
 
 	// Validate each metadata index file; capture the decompressed primary.
 	var primaryBytes []byte
@@ -187,8 +193,10 @@ func (ck *checker) checkTarget(ctx context.Context, be backend.Backend, label st
 	}
 
 	if primaryBytes == nil {
-		ck.add(Result{Target: label, Kind: "packages", Loc: be.String(), Status: StatusWarn,
-			Detail: "primary metadata unavailable; cannot validate packages"})
+		ck.add(Result{
+			Target: label, Kind: "packages", Loc: be.String(), Status: StatusWarn,
+			Detail: "primary metadata unavailable; cannot validate packages",
+		})
 		return
 	}
 
@@ -216,13 +224,17 @@ func (ck *checker) checkTarget(ctx context.Context, be backend.Backend, label st
 func (ck *checker) checkDependencies(label string, be backend.Backend, pkgs []*repodata.Package) {
 	problems := repodata.CheckDependencies(pkgs)
 	if len(problems) == 0 {
-		ck.add(Result{Target: label, Kind: "dependencies", Loc: be.String(), Status: StatusOK,
-			Detail: "all intra-repository dependencies satisfied"})
+		ck.add(Result{
+			Target: label, Kind: "dependencies", Loc: be.String(), Status: StatusOK,
+			Detail: "all intra-repository dependencies satisfied",
+		})
 		return
 	}
 	for _, dp := range problems {
-		ck.add(Result{Target: label, Kind: "dependency", Loc: dp.Package.Location, Status: StatusFail,
-			Detail: dp.String()})
+		ck.add(Result{
+			Target: label, Kind: "dependency", Loc: dp.Package.Location, Status: StatusFail,
+			Detail: dp.String(),
+		})
 	}
 }
 
@@ -241,12 +253,16 @@ func (ck *checker) checkMetadataFile(ctx context.Context, be backend.Backend, la
 
 	// Compressed (closed) size + checksum.
 	if d.Size > 0 && int64(len(raw)) != d.Size {
-		return nil, Result{Target: label, Kind: kind, Loc: loc, Status: StatusFail,
-			Detail: fmt.Sprintf("size %d != metadata %d", len(raw), d.Size)}
+		return nil, Result{
+			Target: label, Kind: kind, Loc: loc, Status: StatusFail,
+			Detail: fmt.Sprintf("size %d != metadata %d", len(raw), d.Size),
+		}
 	}
 	if got, ok := verifyChecksum(raw, d.ChecksumType, d.Checksum); !ok {
-		return nil, Result{Target: label, Kind: kind, Loc: loc, Status: StatusFail,
-			Detail: fmt.Sprintf("%s %s != metadata %s", d.ChecksumType, got, d.Checksum)}
+		return nil, Result{
+			Target: label, Kind: kind, Loc: loc, Status: StatusFail,
+			Detail: fmt.Sprintf("%s %s != metadata %s", d.ChecksumType, got, d.Checksum),
+		}
 	}
 
 	// Decompressed (open) size + checksum. The open checksum uses the same
@@ -255,8 +271,10 @@ func (ck *checker) checkMetadataFile(ctx context.Context, be backend.Backend, la
 	dr, closeFn, derr := decompressReader(bytes.NewReader(raw), d.Location)
 	if derr != nil {
 		// The compressed file's size + checksum are still validated above.
-		return nil, Result{Target: label, Kind: kind, Loc: loc, Status: StatusWarn,
-			Detail: fmt.Sprintf("compressed file valid, but open-checksum not verified: %v", derr)}
+		return nil, Result{
+			Target: label, Kind: kind, Loc: loc, Status: StatusWarn,
+			Detail: fmt.Sprintf("compressed file valid, but open-checksum not verified: %v", derr),
+		}
 	}
 	openHasher, openSupported := newHasher(d.ChecksumType)
 	decompressed, err := io.ReadAll(io.TeeReader(dr, openHasher))
@@ -279,8 +297,10 @@ func (ck *checker) checkMetadataFile(ctx context.Context, be backend.Backend, la
 		return decompressed, Result{Target: label, Kind: kind, Loc: loc, Status: StatusFail, Detail: strings.Join(openIssues, "; ")}
 	}
 
-	return decompressed, Result{Target: label, Kind: kind, Loc: loc, Status: StatusOK,
-		Detail: fmt.Sprintf("size %d, %s ok", len(raw), d.ChecksumType)}
+	return decompressed, Result{
+		Target: label, Kind: kind, Loc: loc, Status: StatusOK,
+		Detail: fmt.Sprintf("size %d, %s ok", len(raw), d.ChecksumType),
+	}
 }
 
 // selectPackages applies the arch and package-name filters and, when
@@ -368,7 +388,7 @@ func (ck *checker) headCheck(ctx context.Context, be backend.Backend, label stri
 	c, cancel := ck.opCtx(ctx)
 	defer cancel()
 	fi, err := be.Stat(c, p.Location)
-	if err == backend.ErrNotExist {
+	if errors.Is(err, backend.ErrNotExist) {
 		return Result{Target: label, Kind: kind, Loc: loc, Status: StatusFail, Detail: "package missing"}
 	}
 	if err != nil {
@@ -378,21 +398,29 @@ func (ck *checker) headCheck(ctx context.Context, be backend.Backend, label stri
 		return Result{Target: label, Kind: kind, Loc: loc, Status: StatusWarn, Detail: "backend did not report a size"}
 	}
 	if p.SizePackage > 0 && fi.Size != p.SizePackage {
-		return Result{Target: label, Kind: kind, Loc: loc, Status: StatusFail,
-			Detail: fmt.Sprintf("size mismatch: backend reports %d, metadata says %d", fi.Size, p.SizePackage)}
+		return Result{
+			Target: label, Kind: kind, Loc: loc, Status: StatusFail,
+			Detail: fmt.Sprintf("size mismatch: backend reports %d, metadata says %d", fi.Size, p.SizePackage),
+		}
 	}
 
 	// Verify the checksum without downloading, if the backend can.
 	if sum := ck.remoteChecksum(ctx, be, fi, p.Location, p.ChecksumType); sum != "" {
 		if !strings.EqualFold(sum, p.PkgID) {
-			return Result{Target: label, Kind: kind, Loc: loc, Status: StatusFail,
-				Detail: fmt.Sprintf("checksum mismatch: backend reports %s, pkgid %s", sum, p.PkgID)}
+			return Result{
+				Target: label, Kind: kind, Loc: loc, Status: StatusFail,
+				Detail: fmt.Sprintf("checksum mismatch: backend reports %s, pkgid %s", sum, p.PkgID),
+			}
 		}
-		return Result{Target: label, Kind: kind, Loc: loc, Status: StatusOK,
-			Detail: fmt.Sprintf("exists, size %d, checksum ok", fi.Size)}
+		return Result{
+			Target: label, Kind: kind, Loc: loc, Status: StatusOK,
+			Detail: fmt.Sprintf("exists, size %d, checksum ok", fi.Size),
+		}
 	}
-	return Result{Target: label, Kind: kind, Loc: loc, Status: StatusOK,
-		Detail: fmt.Sprintf("exists, size %d", fi.Size)}
+	return Result{
+		Target: label, Kind: kind, Loc: loc, Status: StatusOK,
+		Detail: fmt.Sprintf("exists, size %d", fi.Size),
+	}
 }
 
 // remoteChecksum returns a checksum for relpath obtained without downloading
@@ -421,7 +449,7 @@ func (ck *checker) fetchCheck(ctx context.Context, be backend.Backend, label str
 	c, cancel := ck.opCtx(ctx)
 	defer cancel()
 	rc, err := be.Get(c, p.Location)
-	if err == backend.ErrNotExist {
+	if errors.Is(err, backend.ErrNotExist) {
 		return Result{Target: label, Kind: kind, Loc: loc, Status: StatusFail, Detail: "package missing"}
 	}
 	if err != nil {
@@ -445,14 +473,18 @@ func (ck *checker) fetchCheck(ctx context.Context, be backend.Backend, label str
 		return Result{Target: label, Kind: kind, Loc: loc, Status: StatusFail, Detail: "downloading: " + err.Error()}
 	}
 	if p.SizePackage > 0 && written != p.SizePackage {
-		return Result{Target: label, Kind: kind, Loc: loc, Status: StatusFail,
-			Detail: fmt.Sprintf("size mismatch: downloaded %d bytes, metadata says %d", written, p.SizePackage)}
+		return Result{
+			Target: label, Kind: kind, Loc: loc, Status: StatusFail,
+			Detail: fmt.Sprintf("size mismatch: downloaded %d bytes, metadata says %d", written, p.SizePackage),
+		}
 	}
 	if supported && p.PkgID != "" {
 		got := hex.EncodeToString(hasher.Sum(nil))
 		if !strings.EqualFold(got, p.PkgID) {
-			return Result{Target: label, Kind: kind, Loc: loc, Status: StatusFail,
-				Detail: fmt.Sprintf("%s mismatch: downloaded %s, pkgid %s", p.ChecksumType, got, p.PkgID)}
+			return Result{
+				Target: label, Kind: kind, Loc: loc, Status: StatusFail,
+				Detail: fmt.Sprintf("%s mismatch: downloaded %s, pkgid %s", p.ChecksumType, got, p.PkgID),
+			}
 		}
 	}
 
@@ -463,8 +495,10 @@ func (ck *checker) fetchCheck(ctx context.Context, be backend.Backend, label str
 		case rerr != nil:
 			detail += fmt.Sprintf("; rpm check error: %v", rerr)
 		case !ok:
-			return Result{Target: label, Kind: kind, Loc: loc, Status: StatusFail,
-				Detail: fmt.Sprintf("size/checksum ok but rpm payload verification failed: %s", rpmDetail)}
+			return Result{
+				Target: label, Kind: kind, Loc: loc, Status: StatusFail,
+				Detail: fmt.Sprintf("size/checksum ok but rpm payload verification failed: %s", rpmDetail),
+			}
 		default:
 			detail += "; rpm digests ok"
 		}

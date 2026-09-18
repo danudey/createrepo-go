@@ -26,6 +26,7 @@ import (
 
 // credCacheEnv overrides where session credentials are cached. Set it to a
 // directory, or to "off" to disable caching (see credCacheDir).
+// #nosec G101 -- the name of an environment variable, not a credential.
 const credCacheEnv = "CREATEREPO_AWS_CACHE"
 
 // credExpiryWindow is how long before their stated expiry cached credentials
@@ -137,6 +138,8 @@ func (p *cachingProvider) write(creds aws.Credentials) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	// #nosec G117 -- caching the session token is the point of this file;
+	// it is written 0600 into a 0700 directory, as described above.
 	data, err := json.Marshal(cachedCreds{
 		AccessKeyID:     creds.AccessKeyID,
 		SecretAccessKey: creds.SecretAccessKey,

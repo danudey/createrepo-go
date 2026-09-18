@@ -93,7 +93,7 @@ func gpgDetachSign(keyID string, data []byte) ([]byte, error) {
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("gpg sign: %v: %s", err, errBuf.String())
+		return nil, fmt.Errorf("gpg sign: %w: %s", err, errBuf.String())
 	}
 	return out.Bytes(), nil
 }

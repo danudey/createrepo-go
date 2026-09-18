@@ -3,6 +3,7 @@ package backend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -179,7 +180,7 @@ func TestS3DoesNotRetryOnSameRegion(t *testing.T) {
 
 	var warn bytes.Buffer
 	s := testBackend(srv, &warn)
-	if _, err := s.Get(context.Background(), "missing"); err != ErrNotExist {
+	if _, err := s.Get(context.Background(), "missing"); !errors.Is(err, ErrNotExist) {
 		t.Fatalf("Get = %v, want ErrNotExist", err)
 	}
 	if got := calls.Load(); got != 1 {

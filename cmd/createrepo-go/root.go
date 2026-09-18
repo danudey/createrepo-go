@@ -60,9 +60,9 @@ type compatProfile struct {
 // (4.14 / 4.16) cannot read the rpm 6 OPENPGP tag; only RHEL 10 (rpm 6) uses
 // OPENPGP. gzip is used for RHEL 8 since zstd metadata needs RHEL 8.4+.
 var profiles = map[string]compatProfile{
-	"rhel8":  {compression: "gzip", signature: "v4"},
-	"rhel9":  {compression: "zstd", signature: "v4"},
-	"rhel10": {compression: "zstd", signature: "openpgp"},
+	"rhel8":  {compression: "gzip", signature: sigFormatV4},
+	"rhel9":  {compression: "zstd", signature: sigFormatV4},
+	"rhel10": {compression: "zstd", signature: sigFormatOpenPGP},
 }
 
 // profileAliases maps friendly names to canonical profile keys.
@@ -95,7 +95,7 @@ never downloaded.`,
 	pf.StringVar(&gf.target, "target", "", "compatibility profile setting defaults: rhel8, rhel9, rhel10 (aliases: el8/alma9/...)")
 	pf.StringVar(&gf.checksum, "checksum", "sha256", "metadata/package checksum algorithm")
 	pf.StringVar(&gf.compression, "compression", "gzip", "metadata compression: gzip or zstd (zstd needs RHEL 8.4+)")
-	pf.StringVar(&gf.signatureFormat, "signature-format", "v4", "package signature format: v4 (RSAHEADER; RHEL 8/9) or openpgp (rpm 6; RHEL 10+)")
+	pf.StringVar(&gf.signatureFormat, "signature-format", sigFormatV4, "package signature format: v4 (RSAHEADER; RHEL 8/9) or openpgp (rpm 6; RHEL 10+)")
 	pf.StringVar(&gf.locationPrefix, "location-prefix", "Packages", "subdirectory under the repo root for uploaded RPMs (empty string to upload at the repo root)")
 	pf.StringVar(&gf.awsProfile, "profile", "", "AWS named profile for S3 access (sets AWS_PROFILE; MFA-protected assume-role profiles are prompted for on stdin)")
 	pf.StringVar(&gf.awsRegion, "region", "", "AWS region for S3 access (sets AWS_REGION); the bucket's actual region is detected and used if it differs")
@@ -136,12 +136,14 @@ func preRunE(cmd *cobra.Command, args []string) error {
 // environment variables consulted by the AWS SDK's default config loader. Only
 // flags the user actually set are applied, so an existing environment (or the
 // default profile) is left untouched otherwise.
+//
+// os.Setenv only fails on a malformed name, and both names here are constants.
 func applyAWSEnv() {
 	if gf.awsProfile != "" {
-		os.Setenv("AWS_PROFILE", gf.awsProfile)
+		_ = os.Setenv("AWS_PROFILE", gf.awsProfile)
 	}
 	if gf.awsRegion != "" {
-		os.Setenv("AWS_REGION", gf.awsRegion)
+		_ = os.Setenv("AWS_REGION", gf.awsRegion)
 	}
 }
 

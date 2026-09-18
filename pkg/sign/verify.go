@@ -36,7 +36,7 @@ func NewVerifier(keyringPaths ...string) (*Verifier, error) {
 		cmd := exec.Command("rpmkeys", "--dbpath", db, "--import", p)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			cleanup()
-			return nil, fmt.Errorf("import keyring %s: %v: %s", p, err, out)
+			return nil, fmt.Errorf("import keyring %s: %w: %s", p, err, out)
 		}
 	}
 	return &Verifier{dbpath: db, cleanup: cleanup}, nil
@@ -79,7 +79,7 @@ func (v *Verifier) VerifyFile(path string) error {
 		return nil
 	}
 	if runErr != nil {
-		return fmt.Errorf("verify %s: %v: %s", path, runErr, strings.TrimSpace(buf.String()))
+		return fmt.Errorf("verify %s: %w: %s", path, runErr, strings.TrimSpace(buf.String()))
 	}
 	return fmt.Errorf("verify %s: no trusted signature (package unsigned or signed by an unknown key)", path)
 }

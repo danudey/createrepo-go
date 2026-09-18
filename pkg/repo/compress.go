@@ -39,7 +39,7 @@ func (c Compression) compress(data []byte) ([]byte, error) {
 			return nil, err
 		}
 		if _, err := w.Write(data); err != nil {
-			w.Close()
+			_ = w.Close()
 			return nil, err
 		}
 		if err := w.Close(); err != nil {
@@ -48,7 +48,7 @@ func (c Compression) compress(data []byte) ([]byte, error) {
 	case GZIP, "":
 		w := gzip.NewWriter(&buf)
 		if _, err := w.Write(data); err != nil {
-			w.Close()
+			_ = w.Close()
 			return nil, err
 		}
 		if err := w.Close(); err != nil {

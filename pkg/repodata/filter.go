@@ -12,6 +12,7 @@ import (
 // mirroring tools distinguish binary packages from source and debug artifacts.
 type Kind string
 
+// The kinds a package can be classified as. Every package has exactly one.
 const (
 	KindBinary      Kind = "binary"      // an ordinary installable package
 	KindSource      Kind = "source"      // a source rpm (arch "src"/"nosrc")

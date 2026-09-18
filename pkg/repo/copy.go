@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -36,7 +37,7 @@ func (r *Repo) RawRepomd() []byte { return r.raw }
 // operations do not pay for the extra round trip.
 func (r *Repo) MetadataSignature(ctx context.Context) ([]byte, error) {
 	data, err := r.getAll(ctx, repomdPath+".asc")
-	if err == backend.ErrNotExist {
+	if errors.Is(err, backend.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
@@ -58,6 +59,9 @@ func (r *Repo) ClearIndex() {
 // ObjectKind labels a repository file by the role it plays.
 type ObjectKind string
 
+// The kinds of file a repository is made of. Copying treats each kind
+// differently: repomd and its signature are written last, packages may be
+// skipped when already present, and anything "other" is carried across as-is.
 const (
 	ObjectRepomd    ObjectKind = "repomd"    // repodata/repomd.xml
 	ObjectRepomdSig ObjectKind = "signature" // repodata/repomd.xml.asc
@@ -80,7 +84,7 @@ type SourceObject struct {
 
 // verifiable reports whether the object carries a checksum this tool can check.
 func (o SourceObject) verifiable() bool {
-	return o.Checksum != "" && strings.EqualFold(o.ChecksumType, "sha256")
+	return o.Checksum != "" && strings.EqualFold(o.ChecksumType, backend.AlgoSHA256)
 }
 
 // Objects enumerates every file that makes up the repository. When the backend
@@ -97,12 +101,16 @@ func (r *Repo) Objects(ctx context.Context) (objs []SourceObject, listed bool, e
 	}
 	add(SourceObject{Path: repomdPath, Kind: ObjectRepomd, Size: int64(len(r.raw))})
 	for _, d := range r.old.Data {
-		add(SourceObject{Path: d.Location, Kind: ObjectMetadata, Size: d.Size,
-			Checksum: d.Checksum, ChecksumType: d.ChecksumType})
+		add(SourceObject{
+			Path: d.Location, Kind: ObjectMetadata, Size: d.Size,
+			Checksum: d.Checksum, ChecksumType: d.ChecksumType,
+		})
 	}
 	for _, p := range r.idx.Packages() {
-		add(SourceObject{Path: p.Location, Kind: ObjectPackage, Size: p.SizePackage,
-			Checksum: p.PkgID, ChecksumType: p.ChecksumType})
+		add(SourceObject{
+			Path: p.Location, Kind: ObjectPackage, Size: p.SizePackage,
+			Checksum: p.PkgID, ChecksumType: p.ChecksumType,
+		})
 	}
 
 	if l, ok := r.be.(backend.Lister); ok {
@@ -132,7 +140,7 @@ func (r *Repo) Objects(ctx context.Context) (objs []SourceObject, listed bool, e
 			{ConfigPath, ObjectConfig},
 		} {
 			fi, err := r.be.Stat(ctx, probe.path)
-			if err == backend.ErrNotExist {
+			if errors.Is(err, backend.ErrNotExist) {
 				continue
 			}
 			if err != nil {
@@ -323,7 +331,7 @@ func pruneExtraneous(ctx context.Context, dst backend.Backend, objs []SourceObje
 // metadata and computable remotely); otherwise the size has to stand in.
 func destinationMatches(ctx context.Context, dst backend.Backend, obj SourceObject) (bool, error) {
 	fi, err := dst.Stat(ctx, obj.Path)
-	if err == backend.ErrNotExist {
+	if errors.Is(err, backend.ErrNotExist) {
 		return false, nil
 	}
 	if err != nil {
@@ -331,8 +339,8 @@ func destinationMatches(ctx context.Context, dst backend.Backend, obj SourceObje
 	}
 	if obj.verifiable() {
 		if hasher, ok := dst.(backend.RemoteHasher); ok {
-			sum, ok, herr := hasher.Hash(ctx, obj.Path, "sha256")
-			if herr != nil && herr != backend.ErrNotExist {
+			sum, ok, herr := hasher.Hash(ctx, obj.Path, backend.AlgoSHA256)
+			if herr != nil && !errors.Is(herr, backend.ErrNotExist) {
 				return false, fmt.Errorf("remote hash %s: %w", obj.Path, herr)
 			}
 			if ok {
@@ -347,6 +355,9 @@ func destinationMatches(ctx context.Context, dst backend.Backend, obj SourceObje
 		// from a previous generation only in its revision. They are small, so
 		// they are always rewritten rather than compared by size.
 		return false, nil
+	case ObjectMetadata, ObjectPackage, ObjectOther:
+		// Content-addressed or immutable once written, so an equal length
+		// means an equal file.
 	}
 	return obj.Size >= 0 && fi.Size == obj.Size, nil
 }
@@ -463,8 +474,10 @@ func (r *Repo) CopyPackagesFrom(ctx context.Context, src backend.Backend, pkgs [
 
 	for _, p := range pkgs {
 		loc := r.copyLocation(p, opt)
-		obj := SourceObject{Path: p.Location, Kind: ObjectPackage, Size: p.SizePackage,
-			Checksum: p.PkgID, ChecksumType: p.ChecksumType}
+		obj := SourceObject{
+			Path: p.Location, Kind: ObjectPackage, Size: p.SizePackage,
+			Checksum: p.PkgID, ChecksumType: p.ChecksumType,
+		}
 
 		// Signing rewrites the file, so a copy already at the destination is
 		// never reusable and the metadata always has to be re-derived.

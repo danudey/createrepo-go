@@ -5,6 +5,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,7 +46,7 @@ func openBackend(t *testing.T, repoURL string) backend.Backend {
 func beExists(t *testing.T, repoURL, relpath string) bool {
 	be := openBackend(t, repoURL)
 	_, err := be.Stat(context.Background(), relpath)
-	if err == backend.ErrNotExist {
+	if errors.Is(err, backend.ErrNotExist) {
 		return false
 	}
 	if err != nil {
@@ -81,7 +82,7 @@ func beFetch(repoURL, relpath string) ([]byte, bool, error) {
 		}
 	}()
 	rc, err := be.Get(context.Background(), relpath)
-	if err == backend.ErrNotExist {
+	if errors.Is(err, backend.ErrNotExist) {
 		return nil, false, nil
 	}
 	if err != nil {
@@ -143,21 +144,26 @@ func (h *localHarness) RemoteHash() bool { return true }
 func (h *localHarness) abs(repoURL, relpath string) string {
 	return filepath.Join(repoURL, filepath.FromSlash(relpath))
 }
+
 func (h *localHarness) Fetch(repoURL, relpath string) ([]byte, bool, error) {
 	return fileFetch(h.abs(repoURL, relpath))
 }
+
 func (h *localHarness) Exists(t *testing.T, repoURL, relpath string) bool {
 	_, err := os.Stat(h.abs(repoURL, relpath))
 	return err == nil
 }
+
 func (h *localHarness) ReadAll(t *testing.T, repoURL, relpath string) []byte {
 	data, err := os.ReadFile(h.abs(repoURL, relpath))
 	must(t, err)
 	return data
 }
+
 func (h *localHarness) Remove(t *testing.T, repoURL, relpath string) {
 	must(t, os.Remove(h.abs(repoURL, relpath)))
 }
+
 func (h *localHarness) WriteRaw(t *testing.T, repoURL, relpath string, data []byte) {
 	p := h.abs(repoURL, relpath)
 	must(t, os.MkdirAll(filepath.Dir(p), 0o755))
@@ -238,6 +244,7 @@ func (h *s3Harness) createBucket(t *testing.T) {
 func (h *s3Harness) RepoURL(t *testing.T) string {
 	return fmt.Sprintf("s3://%s/%s", h.bucket, uniq(t))
 }
+
 func (h *s3Harness) Env() []string {
 	return []string{
 		"AWS_ACCESS_KEY_ID=" + os.Getenv("AWS_ACCESS_KEY_ID"),
@@ -253,9 +260,11 @@ func (h *s3Harness) RemoteHash() bool { return true }
 func (h *s3Harness) Fetch(repoURL, relpath string) ([]byte, bool, error) {
 	return beFetch(repoURL, relpath)
 }
+
 func (h *s3Harness) Exists(t *testing.T, repoURL, relpath string) bool {
 	return beExists(t, repoURL, relpath)
 }
+
 func (h *s3Harness) ReadAll(t *testing.T, repoURL, relpath string) []byte {
 	return beRead(t, repoURL, relpath)
 }
@@ -377,6 +386,7 @@ func (h *sftpHarness) localPath(t *testing.T, repoURL, relpath string) string {
 	must(t, err)
 	return filepath.Join(u.Path, filepath.FromSlash(relpath))
 }
+
 func (h *sftpHarness) Fetch(repoURL, relpath string) ([]byte, bool, error) {
 	u, err := url.Parse(repoURL)
 	if err != nil {
@@ -384,18 +394,22 @@ func (h *sftpHarness) Fetch(repoURL, relpath string) ([]byte, bool, error) {
 	}
 	return fileFetch(filepath.Join(u.Path, filepath.FromSlash(relpath)))
 }
+
 func (h *sftpHarness) Exists(t *testing.T, repoURL, relpath string) bool {
 	_, err := os.Stat(h.localPath(t, repoURL, relpath))
 	return err == nil
 }
+
 func (h *sftpHarness) ReadAll(t *testing.T, repoURL, relpath string) []byte {
 	data, err := os.ReadFile(h.localPath(t, repoURL, relpath))
 	must(t, err)
 	return data
 }
+
 func (h *sftpHarness) Remove(t *testing.T, repoURL, relpath string) {
 	must(t, os.Remove(h.localPath(t, repoURL, relpath)))
 }
+
 func (h *sftpHarness) WriteRaw(t *testing.T, repoURL, relpath string, data []byte) {
 	p := h.localPath(t, repoURL, relpath)
 	must(t, os.MkdirAll(filepath.Dir(p), 0o755))
@@ -460,6 +474,7 @@ func (h *gcsHarness) Start(t *testing.T) {
 func (h *gcsHarness) RepoURL(t *testing.T) string {
 	return fmt.Sprintf("gs://%s/%s", h.bucket, uniq(t))
 }
+
 func (h *gcsHarness) Env() []string {
 	return []string{
 		"STORAGE_EMULATOR_HOST=" + h.endpoint,
@@ -472,9 +487,11 @@ func (h *gcsHarness) RemoteHash() bool { return true }
 func (h *gcsHarness) Fetch(repoURL, relpath string) ([]byte, bool, error) {
 	return beFetch(repoURL, relpath)
 }
+
 func (h *gcsHarness) Exists(t *testing.T, repoURL, relpath string) bool {
 	return beExists(t, repoURL, relpath)
 }
+
 func (h *gcsHarness) ReadAll(t *testing.T, repoURL, relpath string) []byte {
 	return beRead(t, repoURL, relpath)
 }

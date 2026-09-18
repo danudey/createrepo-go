@@ -27,7 +27,7 @@ type sftpBackend struct {
 	label  string
 }
 
-func newSFTP(_ context.Context, location string) (*sftpBackend, error) {
+func newSFTP(ctx context.Context, location string) (*sftpBackend, error) {
 	u, err := url.Parse(location)
 	if err != nil {
 		return nil, err
@@ -44,7 +44,7 @@ func newSFTP(_ context.Context, location string) (*sftpBackend, error) {
 
 	cfg := &ssh.ClientConfig{
 		User:            user,
-		Auth:            sshAuthMethods(u),
+		Auth:            sshAuthMethods(ctx, u),
 		HostKeyCallback: hostKeyCallback(),
 	}
 	addr := net.JoinHostPort(host, port)
@@ -54,7 +54,7 @@ func newSFTP(_ context.Context, location string) (*sftpBackend, error) {
 	}
 	sc, err := sftp.NewClient(sshClient)
 	if err != nil {
-		sshClient.Close()
+		_ = sshClient.Close()
 		return nil, fmt.Errorf("sftp: open session: %w", err)
 	}
 	return &sftpBackend{
@@ -67,10 +67,12 @@ func newSFTP(_ context.Context, location string) (*sftpBackend, error) {
 
 // sshAuthMethods builds auth methods: the agent (if available) plus a password
 // embedded in the URL (rare, but supported for automation).
-func sshAuthMethods(u *url.URL) []ssh.AuthMethod {
+func sshAuthMethods(ctx context.Context, u *url.URL) []ssh.AuthMethod {
 	var methods []ssh.AuthMethod
 	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
-		if conn, err := net.Dial("unix", sock); err == nil {
+		var d net.Dialer
+		// #nosec G704 -- a unix socket path from SSH_AUTH_SOCK, not a URL.
+		if conn, err := d.DialContext(ctx, "unix", sock); err == nil {
 			ag := agent.NewClient(conn)
 			methods = append(methods, ssh.PublicKeysCallback(ag.Signers))
 		}
@@ -90,6 +92,7 @@ func hostKeyCallback() ssh.HostKeyCallback {
 			return cb
 		}
 	}
+	// #nosec G106 -- deliberate documented fallback, see the comment above.
 	return ssh.InsecureIgnoreHostKey()
 }
 
@@ -128,20 +131,20 @@ func (s *sftpBackend) Put(_ context.Context, relpath string, r io.Reader, _ int6
 		return err
 	}
 	if _, err := io.Copy(f, r); err != nil {
-		f.Close()
-		s.client.Remove(tmp)
+		_ = f.Close()
+		_ = s.client.Remove(tmp)
 		return err
 	}
 	if err := f.Close(); err != nil {
-		s.client.Remove(tmp)
+		_ = s.client.Remove(tmp)
 		return err
 	}
 	// sftp rename does not overwrite on all servers; use PosixRename when available.
 	if err := s.client.PosixRename(tmp, dst); err != nil {
 		// Fall back to remove+rename.
-		s.client.Remove(dst)
+		_ = s.client.Remove(dst)
 		if err2 := s.client.Rename(tmp, dst); err2 != nil {
-			s.client.Remove(tmp)
+			_ = s.client.Remove(tmp)
 			return err2
 		}
 	}
@@ -230,7 +233,7 @@ func (s *sftpBackend) HashesContent() bool { return true }
 // Hash implements RemoteHasher by running sha256sum on the remote host, so the
 // RPM contents never cross the network for validation.
 func (s *sftpBackend) Hash(_ context.Context, relpath, algo string) (string, bool, error) {
-	if algo != "sha256" {
+	if algo != AlgoSHA256 {
 		return "", false, nil
 	}
 	// Confirm the file exists first so a missing file is reported precisely.
