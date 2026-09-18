@@ -3,6 +3,7 @@ package backend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -42,10 +43,14 @@ func newSFTP(ctx context.Context, location string) (*sftpBackend, error) {
 		user = os.Getenv("USER")
 	}
 
+	hkcb, err := hostKeyCallback()
+	if err != nil {
+		return nil, err
+	}
 	cfg := &ssh.ClientConfig{
 		User:            user,
 		Auth:            sshAuthMethods(ctx, u),
-		HostKeyCallback: hostKeyCallback(),
+		HostKeyCallback: hkcb,
 	}
 	addr := net.JoinHostPort(host, port)
 	sshClient, err := ssh.Dial("tcp", addr, cfg)
@@ -83,17 +88,43 @@ func sshAuthMethods(ctx context.Context, u *url.URL) []ssh.AuthMethod {
 	return methods
 }
 
-// hostKeyCallback uses the user's known_hosts when present, otherwise falls
-// back to insecure acceptance (documented in the CLI help).
-func hostKeyCallback() ssh.HostKeyCallback {
-	if home, err := os.UserHomeDir(); err == nil {
-		kh := path.Join(home, ".ssh", "known_hosts")
-		if cb, err := knownhosts.New(kh); err == nil {
-			return cb
-		}
+// InsecureIgnoreHostKey disables SSH host key verification for SFTP
+// connections. It is set from the --insecure-ignore-host-key flag. With it
+// unset (the default), a connection fails when known_hosts cannot be read or
+// does not list the target host, rather than trusting whatever key is offered.
+var InsecureIgnoreHostKey bool
+
+// insecureHint is appended to host key failures so the message names the way out.
+const insecureHint = "; add the host to known_hosts, or pass --insecure-ignore-host-key to connect without verification"
+
+// hostKeyCallback verifies the remote host key against the user's known_hosts.
+// It returns an error when known_hosts cannot be read, and the callback it
+// returns rejects a host that file does not list. Verification is skipped
+// entirely only when the user opted in via InsecureIgnoreHostKey.
+func hostKeyCallback() (ssh.HostKeyCallback, error) {
+	if InsecureIgnoreHostKey {
+		// #nosec G106 -- explicitly requested with --insecure-ignore-host-key.
+		return ssh.InsecureIgnoreHostKey(), nil
 	}
-	// #nosec G106 -- deliberate documented fallback, see the comment above.
-	return ssh.InsecureIgnoreHostKey()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("sftp: locating known_hosts: %w%s", err, insecureHint)
+	}
+	kh := path.Join(home, ".ssh", "known_hosts")
+	cb, err := knownhosts.New(kh)
+	if err != nil {
+		return nil, fmt.Errorf("sftp: reading %s: %w%s", kh, err, insecureHint)
+	}
+	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		err := cb(hostname, remote, key)
+		// A KeyError with no candidate keys means the host is simply absent
+		// from known_hosts; a populated Want means the key has changed.
+		var ke *knownhosts.KeyError
+		if errors.As(err, &ke) && len(ke.Want) == 0 {
+			return fmt.Errorf("sftp: host %s is not listed in %s%s", hostname, kh, insecureHint)
+		}
+		return err
+	}, nil
 }
 
 func (s *sftpBackend) remote(relpath string) string {

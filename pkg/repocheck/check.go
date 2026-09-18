@@ -80,6 +80,9 @@ const (
 	StatusSkip Status = "SKIP"
 )
 
+// kindRepomd is the Result.Kind reported for the repository index itself.
+const kindRepomd = "repomd.xml"
+
 // Result is one validated artifact.
 type Result struct {
 	Target string // the label of the repository the artifact belongs to
@@ -160,20 +163,20 @@ func (ck *checker) checkTarget(ctx context.Context, be backend.Backend, label st
 
 	raw, err := ck.getAll(ctx, be, repomdPath)
 	if errors.Is(err, backend.ErrNotExist) {
-		ck.add(Result{Target: label, Kind: "repomd.xml", Loc: repomdLoc, Status: StatusFail, Detail: "no repodata/repomd.xml (not a repository?)"})
+		ck.add(Result{Target: label, Kind: kindRepomd, Loc: repomdLoc, Status: StatusFail, Detail: "no repodata/repomd.xml (not a repository?)"})
 		return
 	}
 	if err != nil {
-		ck.add(Result{Target: label, Kind: "repomd.xml", Loc: repomdLoc, Status: StatusFail, Detail: "fetch failed: " + err.Error()})
+		ck.add(Result{Target: label, Kind: kindRepomd, Loc: repomdLoc, Status: StatusFail, Detail: "fetch failed: " + err.Error()})
 		return
 	}
 	md, err := repodata.ParseRepomd(raw)
 	if err != nil {
-		ck.add(Result{Target: label, Kind: "repomd.xml", Loc: repomdLoc, Status: StatusFail, Detail: err.Error()})
+		ck.add(Result{Target: label, Kind: kindRepomd, Loc: repomdLoc, Status: StatusFail, Detail: err.Error()})
 		return
 	}
 	ck.add(Result{
-		Target: label, Kind: "repomd.xml", Loc: repomdLoc, Status: StatusOK,
+		Target: label, Kind: kindRepomd, Loc: repomdLoc, Status: StatusOK,
 		Detail: fmt.Sprintf("revision %s, %d metadata files", md.Revision, len(md.Data)),
 	})
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/danudey/createrepo-go/pkg/backend"
 	"github.com/danudey/createrepo-go/pkg/repo"
 	"github.com/danudey/createrepo-go/pkg/sign"
 )
@@ -38,6 +39,11 @@ type globalFlags struct {
 	awsProfile string
 	awsRegion  string
 
+	// insecureIgnoreHostKey disables SSH host key verification for sftp://
+	// locations. Without it, an unreadable known_hosts or an unlisted host is
+	// a connection failure.
+	insecureIgnoreHostKey bool
+
 	// signing / verification
 	signMetadata    bool
 	signPackages    bool
@@ -60,16 +66,23 @@ type compatProfile struct {
 // (4.14 / 4.16) cannot read the rpm 6 OPENPGP tag; only RHEL 10 (rpm 6) uses
 // OPENPGP. gzip is used for RHEL 8 since zstd metadata needs RHEL 8.4+.
 var profiles = map[string]compatProfile{
-	"rhel8":  {compression: "gzip", signature: sigFormatV4},
-	"rhel9":  {compression: "zstd", signature: sigFormatV4},
-	"rhel10": {compression: "zstd", signature: sigFormatOpenPGP},
+	profileRHEL8:  {compression: "gzip", signature: sigFormatV4},
+	profileRHEL9:  {compression: "zstd", signature: sigFormatV4},
+	profileRHEL10: {compression: "zstd", signature: sigFormatOpenPGP},
 }
+
+// The canonical profile keys --target accepts.
+const (
+	profileRHEL8  = "rhel8"
+	profileRHEL9  = "rhel9"
+	profileRHEL10 = "rhel10"
+)
 
 // profileAliases maps friendly names to canonical profile keys.
 var profileAliases = map[string]string{
-	"el8": "rhel8", "rocky8": "rhel8", "alma8": "rhel8", "almalinux8": "rhel8", "centos8": "rhel8",
-	"el9": "rhel9", "rocky9": "rhel9", "alma9": "rhel9", "almalinux9": "rhel9", "centos9": "rhel9",
-	"el10": "rhel10", "rocky10": "rhel10", "alma10": "rhel10", "almalinux10": "rhel10", "centos10": "rhel10",
+	"el8": profileRHEL8, "rocky8": profileRHEL8, "alma8": profileRHEL8, "almalinux8": profileRHEL8, "centos8": profileRHEL8,
+	"el9": profileRHEL9, "rocky9": profileRHEL9, "alma9": profileRHEL9, "almalinux9": profileRHEL9, "centos9": profileRHEL9,
+	"el10": profileRHEL10, "rocky10": profileRHEL10, "alma10": profileRHEL10, "almalinux10": profileRHEL10, "centos10": profileRHEL10,
 }
 
 var gf globalFlags
@@ -102,6 +115,7 @@ never downloaded.`,
 	pf.IntVar(&gf.changelogLimit, "changelog-limit", 10, "most-recent changelog entries to keep per package (0 = all)")
 	pf.BoolVar(&gf.dryRun, "dry-run", false, "show what would change without transferring anything")
 	pf.BoolVar(&gf.force, "force", false, "overwrite a remote file whose content differs from the local RPM")
+	pf.BoolVar(&gf.insecureIgnoreHostKey, "insecure-ignore-host-key", false, "skip SSH host key verification for sftp:// locations (by default an unreadable ~/.ssh/known_hosts, or a host missing from it, is an error)")
 
 	pf.BoolVar(&gf.signMetadata, "sign-metadata", false, "GPG-sign repomd.xml (writes repomd.xml.asc)")
 	pf.BoolVar(&gf.signPackages, "sign-packages", false, "GPG-sign RPMs (rpmsign) before uploading")
@@ -122,6 +136,7 @@ func preRunE(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	applyAWSEnv()
+	backend.InsecureIgnoreHostKey = gf.insecureIgnoreHostKey
 	// rebuild --resign-packages is an explicit instruction to sign the packages,
 	// so it satisfies "what to sign" for a supplied key. It is deliberately not
 	// derived from the recorded config (which would silently re-sign the whole

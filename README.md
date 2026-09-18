@@ -75,7 +75,7 @@ The repository location's URL scheme selects the backend:
 | Scheme | Example | Notes |
 | --- | --- | --- |
 | local | `/srv/repo` or `file:///srv/repo` | read/write |
-| SSH/SFTP | `sftp://user@host/srv/repo` | uses the ssh-agent and `~/.ssh/known_hosts`; remote `sha256sum` validation |
+| SSH/SFTP | `sftp://user@host/srv/repo` | uses the ssh-agent and `~/.ssh/known_hosts`; remote `sha256sum` validation. The host key is verified against `~/.ssh/known_hosts`, and the connection fails if that file cannot be read or does not list the host — pass `--insecure-ignore-host-key` to connect without verification |
 | S3 | `s3://bucket/prefix` | standard AWS credential chain; `--profile`/`--region` (or `AWS_PROFILE`/`AWS_REGION`); `AWS_ENDPOINT_URL` for S3-compatible stores. The bucket's region is detected automatically, and a wrong `--region` is corrected with a warning naming the right endpoint. MFA-protected assume-role profiles are prompted for on stdin, and the resulting session credentials are cached (see below) so later commands do not ask for another code |
 | GCS | `gs://bucket/prefix` | application-default credentials |
 | HTTP(S) | `https://host/repo/` | **read-only** (`list`, `verify`) |
