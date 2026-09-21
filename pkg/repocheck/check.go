@@ -22,12 +22,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
+	"github.com/danudey/createrepo-go/pkg/progress"
 	"github.com/danudey/createrepo-go/pkg/repodata"
 )
 
@@ -101,6 +103,9 @@ type Config struct {
 	Concurrency int
 	// Timeout bounds each individual backend operation. Zero means no timeout.
 	Timeout time.Duration
+	// Tracker, if set, reports the progress of the package downloads a fetch
+	// check makes. The cheaper levels transfer only metadata and report nothing.
+	Tracker *progress.Tracker
 }
 
 // checker runs validations against targets and accumulates results.
@@ -356,6 +361,17 @@ func (ck *checker) selectPackages(all []*repodata.Package) []*repodata.Package {
 
 // checkPackages runs the per-package checks with bounded concurrency.
 func (ck *checker) checkPackages(ctx context.Context, be backend.Backend, label string, pkgs []*repodata.Package) {
+	// Only the fetch level downloads anything; a head check is a stat per
+	// package and needs no progress display.
+	if ck.cfg.Level == LevelFetch && len(pkgs) > 0 {
+		var bytes int64
+		for _, p := range pkgs {
+			bytes += max(p.SizePackage, 0)
+		}
+		ck.cfg.Tracker.Begin("download", len(pkgs), bytes)
+		defer ck.cfg.Tracker.End()
+	}
+
 	conc := ck.cfg.Concurrency
 	if conc < 1 {
 		conc = 1
@@ -453,12 +469,16 @@ func (ck *checker) fetchCheck(ctx context.Context, be backend.Backend, label str
 	defer cancel()
 	rc, err := be.Get(c, p.Location)
 	if errors.Is(err, backend.ErrNotExist) {
+		ck.cfg.Tracker.Skip(1, p.SizePackage)
 		return Result{Target: label, Kind: kind, Loc: loc, Status: StatusFail, Detail: "package missing"}
 	}
 	if err != nil {
+		ck.cfg.Tracker.Skip(1, p.SizePackage)
 		return Result{Target: label, Kind: kind, Loc: loc, Status: StatusFail, Detail: "fetch failed: " + err.Error()}
 	}
 	defer rc.Close()
+	item := ck.cfg.Tracker.Item(path.Base(p.Location), p.SizePackage)
+	defer item.Done()
 
 	tmp, err := os.CreateTemp("", "repocheck-*.rpm")
 	if err != nil {
@@ -468,7 +488,7 @@ func (ck *checker) fetchCheck(ctx context.Context, be backend.Backend, label str
 	defer os.Remove(tmpName)
 
 	hasher, supported := newHasher(p.ChecksumType)
-	written, err := io.Copy(io.MultiWriter(tmp, hasher), rc)
+	written, err := io.Copy(io.MultiWriter(tmp, hasher), item.Reader(rc))
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}

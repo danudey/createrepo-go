@@ -134,7 +134,7 @@ func effectiveConfig(cmd *cobra.Command, prev *repoconfig.Config, name, baseURL 
 	if gf.signPackages || gf.signMetadata {
 		cfg.SignatureFormat = gf.signatureFormat
 		if fpr, err := sign.Fingerprint(gf.gpgKey, gf.gpgKeyID); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not resolve signing key fingerprint: %v\n", err)
+			fmt.Fprintf(stderr(cmd), "warning: could not resolve signing key fingerprint: %v\n", err)
 		} else if fpr != "" {
 			cfg.GPGKeyID = fpr
 		}
@@ -146,13 +146,13 @@ func effectiveConfig(cmd *cobra.Command, prev *repoconfig.Config, name, baseURL 
 // mode, and a failure is reported without failing the command: by this point the
 // packages and metadata have already been published.
 func writeRepoConfig(cmd *cobra.Command, be backend.Backend, cfg *repoconfig.Config) {
-	out := cmd.OutOrStdout()
+	out := stdout(cmd)
 	if gf.dryRun {
 		fmt.Fprintf(out, "[dry-run] config: would write %s\n", repoconfig.Path)
 		return
 	}
 	if err := repoconfig.Save(ctx(cmd), be, cfg); err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not write %s: %v\n", repoconfig.Path, err)
+		fmt.Fprintf(stderr(cmd), "warning: could not write %s: %v\n", repoconfig.Path, err)
 		return
 	}
 	fmt.Fprintf(out, "config: wrote %s\n", repoconfig.Path)

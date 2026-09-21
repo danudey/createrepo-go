@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
+	"github.com/danudey/createrepo-go/pkg/progress"
 	"github.com/danudey/createrepo-go/pkg/repodata"
 	"github.com/danudey/createrepo-go/pkg/rpmmeta"
 )
@@ -215,6 +216,9 @@ type CopyOptions struct {
 	// Progress reports each object as it is handled. action is one of "copy",
 	// "skip" or "delete".
 	Progress func(action string, obj SourceObject)
+
+	// Tracker, if set, reports the bytes moving through each transfer.
+	Tracker *progress.Tracker
 }
 
 // CopyStats summarizes what a copy transferred.
@@ -232,10 +236,17 @@ type CopyStats struct {
 // repomd.xml lands last and the destination is never a torn repository.
 func CopyExact(ctx context.Context, src, dst backend.Backend, objs []SourceObject, opt CopyOptions) (*CopyStats, error) {
 	stats := &CopyStats{}
-	progress := opt.Progress
-	if progress == nil {
-		progress = func(string, SourceObject) {}
+	report := opt.Progress
+	if report == nil {
+		report = func(string, SourceObject) {}
 	}
+
+	// Every object crosses the wire twice — fetched from the source, written to
+	// the destination — so that is what the operation has to move. Objects
+	// found to be present already are taken back off the total as they are
+	// skipped.
+	opt.Tracker.Begin("copy", len(objs), 2*totalSize(objs))
+	defer opt.Tracker.End()
 
 	for _, obj := range objs {
 		present, err := destinationMatches(ctx, dst, obj)
@@ -244,7 +255,8 @@ func CopyExact(ctx context.Context, src, dst backend.Backend, objs []SourceObjec
 		}
 		if present && !opt.Force {
 			stats.Skipped++
-			progress("skip", obj)
+			opt.Tracker.Skip(1, 2*max(obj.Size, 0))
+			report("skip", obj)
 			continue
 		}
 		// A dry run reports the transfer without performing it, so it stays
@@ -254,24 +266,30 @@ func CopyExact(ctx context.Context, src, dst backend.Backend, objs []SourceObjec
 			if obj.Size > 0 {
 				stats.Bytes += obj.Size
 			}
-			progress("copy", obj)
+			report("copy", obj)
 			continue
 		}
 
-		local, size, err := fetchToTemp(ctx, src, obj)
+		item := opt.Tracker.Item(path.Base(obj.Path), obj.Size)
+		item.Phase("get")
+		local, size, err := fetchToTemp(ctx, src, obj, item)
 		if err != nil {
+			item.Done()
 			return nil, err
 		}
 		if opt.Inspect != nil {
 			if err := opt.Inspect(obj, local); err != nil {
+				item.Done()
 				os.Remove(local)
 				return nil, err
 			}
 		}
 		stats.Copied++
 		stats.Bytes += size
-		progress("copy", obj)
-		err = putFile(ctx, dst, obj.Path, local)
+		report("copy", obj)
+		item.Phase("put")
+		err = putFile(ctx, dst, obj.Path, local, item)
+		item.Done()
 		os.Remove(local)
 		if err != nil {
 			return nil, fmt.Errorf("write %s: %w", obj.Path, err)
@@ -382,12 +400,13 @@ func tempSuffix(href string) string {
 // fetchToTemp streams an object from be into a temporary file, verifying its
 // size and (when the metadata records one) its checksum. The caller owns the
 // returned file and must remove it.
-func fetchToTemp(ctx context.Context, be backend.Backend, obj SourceObject) (string, int64, error) {
+func fetchToTemp(ctx context.Context, be backend.Backend, obj SourceObject, item *progress.Item) (string, int64, error) {
 	rc, err := be.Get(ctx, obj.Path)
 	if err != nil {
 		return "", 0, fmt.Errorf("read %s: %w", obj.Path, err)
 	}
 	defer rc.Close()
+	body := item.Reader(rc)
 
 	f, err := os.CreateTemp("", "cr-copy-*-"+tempSuffix(obj.Path))
 	if err != nil {
@@ -401,7 +420,7 @@ func fetchToTemp(ctx context.Context, be backend.Backend, obj SourceObject) (str
 	}
 
 	h := sha256.New()
-	size, err := io.Copy(io.MultiWriter(f, h), rc)
+	size, err := io.Copy(io.MultiWriter(f, h), body)
 	if err != nil {
 		return fail(fmt.Errorf("read %s: %w", obj.Path, err))
 	}
@@ -424,7 +443,7 @@ func fetchToTemp(ctx context.Context, be backend.Backend, obj SourceObject) (str
 }
 
 // putFile uploads a local file to a backend.
-func putFile(ctx context.Context, be backend.Backend, href, local string) error {
+func putFile(ctx context.Context, be backend.Backend, href, local string, item *progress.Item) error {
 	f, err := os.Open(local)
 	if err != nil {
 		return err
@@ -434,7 +453,17 @@ func putFile(ctx context.Context, be backend.Backend, href, local string) error 
 	if err != nil {
 		return err
 	}
-	return be.Put(ctx, href, f, fi.Size())
+	return be.Put(ctx, href, item.Reader(f), fi.Size())
+}
+
+// totalSize sums the sizes the metadata records for objs. Objects of unknown
+// size contribute nothing, so the result is a floor.
+func totalSize(objs []SourceObject) int64 {
+	var total int64
+	for _, o := range objs {
+		total += max(o.Size, 0)
+	}
+	return total
 }
 
 // PackageCopyOptions controls CopyPackagesFrom, which brings selected packages
@@ -472,6 +501,9 @@ type PackageCopyOptions struct {
 	// Progress reports each package as it is handled. action is "copy" or
 	// "skip".
 	Progress func(action string, p *repodata.Package, location string)
+
+	// Tracker, if set, reports the bytes moving through each transfer.
+	Tracker *progress.Tracker
 }
 
 // CopyPackagesFrom transfers pkgs (records from another repository's metadata)
@@ -484,10 +516,19 @@ type PackageCopyOptions struct {
 // transferred again, which is what makes an interrupted copy resumable.
 func (r *Repo) CopyPackagesFrom(ctx context.Context, src backend.Backend, pkgs []*repodata.Package, opt PackageCopyOptions) (*CopyStats, error) {
 	stats := &CopyStats{}
-	progress := opt.Progress
-	if progress == nil {
-		progress = func(string, *repodata.Package, string) {}
+	report := opt.Progress
+	if report == nil {
+		report = func(string, *repodata.Package, string) {}
 	}
+
+	// Each package is downloaded and then uploaded again, so it costs twice its
+	// size. Packages already at the destination come back off the total.
+	var expected int64
+	for _, p := range pkgs {
+		expected += 2 * max(p.SizePackage, 0)
+	}
+	opt.Tracker.Begin("copy", len(pkgs), expected)
+	defer opt.Tracker.End()
 
 	for _, p := range pkgs {
 		loc := r.copyLocation(p, opt)
@@ -510,7 +551,8 @@ func (r *Repo) CopyPackagesFrom(ctx context.Context, src backend.Backend, pkgs [
 			if present {
 				r.addCopied(p, loc, opt)
 				stats.Skipped++
-				progress("skip", p, loc)
+				opt.Tracker.Skip(1, 2*max(p.SizePackage, 0))
+				report("skip", p, loc)
 				continue
 			}
 		}
@@ -522,16 +564,20 @@ func (r *Repo) CopyPackagesFrom(ctx context.Context, src backend.Backend, pkgs [
 			r.copied[loc] = p.SizePackage
 			stats.Copied++
 			stats.Bytes += p.SizePackage
-			progress("copy", p, loc)
+			report("copy", p, loc)
 			continue
 		}
 
-		local, size, err := fetchToTemp(ctx, src, obj)
+		item := opt.Tracker.Item(path.Base(p.Location), p.SizePackage)
+		item.Phase("get")
+		local, size, err := fetchToTemp(ctx, src, obj, item)
 		if err != nil {
+			item.Done()
 			return nil, err
 		}
 		if opt.Inspect != nil {
 			if err := opt.Inspect(p, local); err != nil {
+				item.Done()
 				os.Remove(local)
 				return nil, err
 			}
@@ -541,9 +587,11 @@ func (r *Repo) CopyPackagesFrom(ctx context.Context, src backend.Backend, pkgs [
 		// next package is fetched, so disk use stays bounded by one package.
 		upload, release := local, func() { os.Remove(local) }
 		if opt.Sign != nil {
+			item.Phase("sign")
 			signed, cleanup, err := opt.Sign(local)
 			os.Remove(local)
 			if err != nil {
+				item.Done()
 				return nil, fmt.Errorf("sign %s: %w", p.NEVRA(), err)
 			}
 			upload, release = signed, cleanup
@@ -553,6 +601,7 @@ func (r *Repo) CopyPackagesFrom(ctx context.Context, src backend.Backend, pkgs [
 		if rewrites || opt.RebuildMetadata {
 			indexed, err = r.addFromFile(upload, loc, opt)
 			if err != nil {
+				item.Done()
 				release()
 				return nil, fmt.Errorf("index %s: %w", p.NEVRA(), err)
 			}
@@ -562,9 +611,12 @@ func (r *Repo) CopyPackagesFrom(ctx context.Context, src backend.Backend, pkgs [
 
 		stats.Copied++
 		stats.Bytes += size
-		progress("copy", p, loc)
+		report("copy", p, loc)
 
-		if err := putFile(ctx, r.be, loc, upload); err != nil {
+		item.Phase("put")
+		err = putFile(ctx, r.be, loc, upload, item)
+		item.Done()
+		if err != nil {
 			release()
 			return nil, fmt.Errorf("write %s: %w", loc, err)
 		}

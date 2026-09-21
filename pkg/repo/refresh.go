@@ -64,10 +64,18 @@ type RefreshResult struct {
 func (r *Repo) RefreshFromPackages(ctx context.Context, opt RefreshOptions) (*RefreshResult, error) {
 	res := &RefreshResult{}
 
+	// Reading the packages is free on a local backend and a full download of
+	// the repository on any other, so that is what the progress display covers.
+	if n, bytes := r.RefreshEstimate(); n > 0 {
+		r.opt.Tracker.Begin("download", n, bytes)
+		defer r.opt.Tracker.End()
+	}
+
 	for _, old := range r.idx.Packages() {
 		local, cleanup, size, err := r.readablePath(ctx, old.Location)
 		if errors.Is(err, backend.ErrNotExist) {
 			res.Missing = append(res.Missing, old.Location)
+			r.opt.Tracker.Skip(1, old.SizePackage)
 			continue
 		}
 		if err != nil {

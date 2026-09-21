@@ -87,7 +87,7 @@ supports it.`,
 				if err != nil {
 					return fmt.Errorf("add %s: %w", p, err)
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "staged %s -> %s\n", pkg.NEVRA(), pkg.Location)
+				fmt.Fprintf(stdout(cmd), "staged %s -> %s\n", pkg.NEVRA(), pkg.Location)
 			}
 			kept, broken := r.PruneWarnings()
 			printPruneWarnings(cmd, kept, broken)

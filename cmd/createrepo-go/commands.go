@@ -61,7 +61,7 @@ longer referenced by the metadata, its RPM file is garbage-collected on publish.
 			for _, n := range names {
 				removed := r.Remove(n, arch, evr)
 				for _, p := range removed {
-					fmt.Fprintf(cmd.OutOrStdout(), "removed %s\n", p.NEVRA())
+					fmt.Fprintf(stdout(cmd), "removed %s\n", p.NEVRA())
 				}
 				total += len(removed)
 			}
@@ -100,9 +100,9 @@ func listCmd() *cobra.Command {
 			defer r.Close()
 			pkgs := r.Index().Packages()
 			for _, p := range pkgs {
-				fmt.Fprintf(cmd.OutOrStdout(), "%-40s %12d  %s\n", p.NEVRA(), p.SizePackage, p.Location)
+				fmt.Fprintf(stdout(cmd), "%-40s %12d  %s\n", p.NEVRA(), p.SizePackage, p.Location)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%d package(s)\n", len(pkgs))
+			fmt.Fprintf(stdout(cmd), "%d package(s)\n", len(pkgs))
 			return nil
 		},
 	}
@@ -145,7 +145,7 @@ though it had been verified.`,
 			}
 			defer r.Close()
 
-			out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
+			out, errOut := stdout(cmd), stderr(cmd)
 			mode := repo.ChecksumCheap
 			if checksums {
 				mode = repo.ChecksumContent
@@ -207,7 +207,7 @@ func verifySummary(res *repo.VerifyResult) string {
 const dryRunPrefix = "[dry-run] "
 
 func printPlan(cmd *cobra.Command, plan *repo.Plan, dryRun bool) {
-	out := cmd.OutOrStdout()
+	out := stdout(cmd)
 	prefix := ""
 	if dryRun {
 		prefix = dryRunPrefix
@@ -258,7 +258,7 @@ func printPlan(cmd *cobra.Command, plan *repo.Plan, dryRun bool) {
 // versions dropped despite a dependent (--prune-break-deps). Warnings go to
 // stderr so they stand out from the normal plan output.
 func printPruneWarnings(cmd *cobra.Command, kept, broken []repodata.Breakage) {
-	errOut := cmd.ErrOrStderr()
+	errOut := stderr(cmd)
 	for _, b := range kept {
 		fmt.Fprintf(errOut, "warning: keeping %s: it is required by %s (%s)\n",
 			b.Provider.NEVRA(), b.Dependent.NEVRA(), b.Requires.Constraint())

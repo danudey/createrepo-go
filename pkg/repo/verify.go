@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
+	"github.com/danudey/createrepo-go/pkg/progress"
 	"github.com/danudey/createrepo-go/pkg/repodata"
 )
 
@@ -116,6 +118,15 @@ func (r *Repo) Verify(ctx context.Context, opt VerifyOptions) (*VerifyResult, er
 	pkgs := r.idx.Packages()
 	res := &VerifyResult{Packages: len(pkgs)}
 
+	// Only a content check against a backend that cannot hash for us moves any
+	// data, and that is exactly what DownloadEstimate measures.
+	if opt.Checksums == ChecksumContent {
+		if n, bytes := r.DownloadEstimate(); n > 0 {
+			r.opt.Tracker.Begin("download", n, bytes)
+			defer r.opt.Tracker.End()
+		}
+	}
+
 	conc := opt.Concurrency
 	if conc < 1 {
 		conc = 1
@@ -194,9 +205,11 @@ func (r *Repo) verifyPackage(ctx context.Context, p *repodata.Package, opt Verif
 	switch {
 	case errors.Is(err, backend.ErrNotExist):
 		v.fail(p, "the RPM the metadata references is missing")
+		r.opt.Tracker.Skip(1, p.SizePackage)
 		return v
 	case err != nil:
 		v.fail(p, "stat failed: "+err.Error())
+		r.opt.Tracker.Skip(1, p.SizePackage)
 		return v
 	}
 	if p.SizePackage > 0 && fi.Size != p.SizePackage {
@@ -207,6 +220,7 @@ func (r *Repo) verifyPackage(ctx context.Context, p *repodata.Package, opt Verif
 
 	if p.PkgID == "" {
 		v.unconfirmed++
+		r.opt.Tracker.Skip(1, p.SizePackage)
 		return v
 	}
 
@@ -253,7 +267,9 @@ func (r *Repo) verifyPackage(ctx context.Context, p *repodata.Package, opt Verif
 	}
 
 	// Content mode against a backend that cannot hash for us: read the object.
-	sum, n, err := hashObject(ctx, r.be, p.Location)
+	item := r.opt.Tracker.Item(path.Base(p.Location), p.SizePackage)
+	sum, n, err := hashObject(ctx, r.be, p.Location, item)
+	item.Done()
 	v.downloaded++
 	v.bytesRead += n
 	if err != nil {
@@ -274,14 +290,14 @@ func (r *Repo) verifyPackage(ctx context.Context, p *repodata.Package, opt Verif
 // hashObject streams an object from the backend through sha256, returning the
 // hex digest and the number of bytes read. Nothing is buffered: an RPM of any
 // size costs one pass and no disk.
-func hashObject(ctx context.Context, be backend.Backend, relpath string) (string, int64, error) {
+func hashObject(ctx context.Context, be backend.Backend, relpath string, item *progress.Item) (string, int64, error) {
 	rc, err := be.Get(ctx, relpath)
 	if err != nil {
 		return "", 0, err
 	}
 	defer rc.Close()
 	h := sha256.New()
-	n, err := io.Copy(h, rc)
+	n, err := io.Copy(h, item.Reader(rc))
 	if err != nil {
 		return "", n, err
 	}

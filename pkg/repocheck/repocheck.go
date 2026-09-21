@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
+	"github.com/danudey/createrepo-go/pkg/progress"
 )
 
 // repomdPath is the location of the repository index relative to the repo root.
@@ -70,6 +71,10 @@ type Options struct {
 	// RPM is the (optional) rpm command used for payload-digest verification at
 	// the fetch level. Build it with DetectRPM.
 	RPM RPMTool
+
+	// Tracker, if set, reports the progress of the package downloads a fetch
+	// check makes. Nothing else a check does is large enough to report.
+	Tracker *progress.Tracker
 
 	// Logf, when non-nil, receives a line for every individual check.
 	Logf func(format string, args ...any)
@@ -109,6 +114,7 @@ func Run(ctx context.Context, opts Options) (results []Result, warnings []string
 		Packages:    opts.Packages,
 		Concurrency: opts.Concurrency,
 		Timeout:     opts.Timeout,
+		Tracker:     opts.Tracker,
 	}
 	ck := newChecker(cfg, opts.RPM, opts.Logf)
 

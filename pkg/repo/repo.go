@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
+	"github.com/danudey/createrepo-go/pkg/progress"
 	"github.com/danudey/createrepo-go/pkg/repodata"
 	"github.com/danudey/createrepo-go/pkg/rpmmeta"
 )
@@ -52,6 +53,11 @@ type Options struct {
 
 	// Signer, if set, signs repomd.xml.
 	Signer Signer
+
+	// Tracker, if set, receives the progress of every transfer this repository
+	// makes: the RPMs a commit uploads, and the ones a refresh or a re-sign
+	// downloads. A nil Tracker reports nothing, which is the default.
+	Tracker *progress.Tracker
 
 	// now overrides the timestamp source (for tests); zero means time.Now.
 	now int64
