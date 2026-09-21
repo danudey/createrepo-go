@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"os"
+	"path"
 	"path/filepath"
 	"testing"
 
@@ -179,7 +180,8 @@ func TestRebuildRelocateFromOrphan(t *testing.T) {
 	r.Close()
 
 	rootLoc := filepath.Base(helloRPM())
-	poolLoc := filepath.Join("pool", rootLoc)
+	// Locations inside a repository always use forward slashes, whatever the host OS.
+	poolLoc := path.Join("pool", rootLoc)
 
 	// Reopen and relocate without staging any local file.
 	inner, err := backend.Open(context.Background(), dir)

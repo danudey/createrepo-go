@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -247,7 +248,8 @@ func TestRelocationMovesInsteadOfReupload(t *testing.T) {
 	r.Close()
 
 	rootLoc := filepath.Base(helloRPM())
-	prefixLoc := filepath.Join("Packages", rootLoc)
+	// Locations inside a repository always use forward slashes, whatever the host OS.
+	prefixLoc := path.Join("Packages", rootLoc)
 
 	// Re-add the identical RPM under a new --location-prefix.
 	inner, err := backend.Open(context.Background(), dir)
