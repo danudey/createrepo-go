@@ -105,7 +105,10 @@ The suite (`scenarios_test.go`) exercises, per backend:
   gate (`--verify-sigs`);
 - a repeated create/update/remove stress loop that asserts superseded metadata
   is garbage-collected on every publish;
-- `verify` detecting a missing blob and a corrupted (wrong size/checksum) blob.
+- `verify` detecting a missing blob and a corrupted (wrong size/checksum) blob;
+- `takeover` analysing a repository without changing it (and `--adopt` writing
+  only the config file), and refusing a takeover that would leave a detached
+  `repomd.xml.asc` describing metadata that no longer exists.
 
 The read-only HTTP backend runs the read subset (`list`, `verify`) and asserts
 that writes are rejected.

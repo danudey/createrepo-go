@@ -136,6 +136,20 @@ func IsLocal(be Backend) bool {
 	return ok
 }
 
+// ReadOnlyBackend is an optional capability: a backend that can read a
+// repository but never write one, so a caller planning to publish can say so
+// before doing any work rather than failing at the first Put.
+type ReadOnlyBackend interface {
+	// ReadOnly reports whether writes to this backend always fail.
+	ReadOnly() bool
+}
+
+// IsReadOnly reports whether be rejects every write.
+func IsReadOnly(be Backend) bool {
+	ro, ok := be.(ReadOnlyBackend)
+	return ok && ro.ReadOnly()
+}
+
 // Closer is implemented by backends holding connections that should be closed.
 type Closer interface {
 	Close() error

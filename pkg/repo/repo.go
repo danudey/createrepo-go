@@ -212,6 +212,19 @@ func (r *Repo) loadData(ctx context.Context, repomd *repodata.Repomd, typ string
 	return decompress(raw)
 }
 
+// MetadataDocument returns the decompressed contents of the metadata document
+// of the given type, as repomd.xml references it — "primary", "filelists" and
+// "other", but equally the documents this tool does not itself generate
+// ("group", "updateinfo", "modules", …). It returns (nil, nil) when the
+// repository publishes no document of that type, so a caller can probe for one
+// without treating its absence as an error.
+func (r *Repo) MetadataDocument(ctx context.Context, typ string) ([]byte, error) {
+	if r.old == nil {
+		return nil, nil
+	}
+	return r.loadData(ctx, r.old, typ)
+}
+
 // AddRPM parses a local RPM, places it at its destination href and stages it
 // for upload. A package with the same name+arch+EVR already present is treated
 // as an update (superseded). With PruneOlder, older versions are also removed.

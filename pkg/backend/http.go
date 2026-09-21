@@ -72,3 +72,7 @@ func (h *httpBackend) Stat(ctx context.Context, relpath string) (*FileInfo, erro
 func (h *httpBackend) Put(context.Context, string, io.Reader, int64) error { return errReadOnly }
 func (h *httpBackend) Delete(context.Context, string) error                { return errReadOnly }
 func (h *httpBackend) String() string                                      { return h.base }
+
+// ReadOnly implements backend.ReadOnlyBackend: HTTP(S) can serve a repository
+// but never publish one.
+func (h *httpBackend) ReadOnly() bool { return true }

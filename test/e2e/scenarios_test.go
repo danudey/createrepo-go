@@ -538,6 +538,52 @@ var scenarios = []scenario{
 		}
 	}},
 
+	{name: "takeover_reports_without_changing_anything", run: func(c *tctx, r rpmSet) {
+		c.add(r.hello, r.libfoo)
+		// Make it look like a repository somebody else published: drop the
+		// config file this tool records, which is what takeover starts from.
+		c.h.Remove(c.t, c.repo, "createrepo-go.json")
+		before := c.repomdLocations()
+
+		res := c.cli("takeover", c.repo)
+		if !strings.Contains(res.combined(), "Verdict: 0 blocking") {
+			c.t.Errorf("a repository this tool itself published should have no blocking findings:\n%s", res.combined())
+		}
+		// The analysis is read-only: same metadata files, same packages.
+		if got := c.repomdLocations(); strings.Join(got, ",") != strings.Join(before, ",") {
+			c.t.Errorf("takeover republished the metadata:\nbefore %v\nafter  %v", before, got)
+		}
+		if c.h.Exists(c.t, c.repo, "createrepo-go.json") {
+			c.t.Error("takeover wrote the config file without --adopt")
+		}
+		c.wantCount(2)
+		c.verifyOK()
+
+		// Adopting records the settings and still publishes nothing.
+		c.cli("takeover", c.repo, "--adopt", "--yes", "--repo-name", "Taken Over")
+		c.mustExist("createrepo-go.json")
+		if got := c.repomdLocations(); strings.Join(got, ",") != strings.Join(before, ",") {
+			c.t.Errorf("--adopt republished the metadata:\nbefore %v\nafter  %v", before, got)
+		}
+		c.verifyOK()
+	}},
+
+	{name: "takeover_refuses_to_invalidate_a_signature", run: func(c *tctx, r rpmSet) {
+		c.add(r.hello)
+		// A detached signature the republish would leave behind, describing a
+		// repomd.xml that would no longer exist.
+		c.h.WriteRaw(c.t, c.repo, "repodata/repomd.xml.asc",
+			[]byte("-----BEGIN PGP SIGNATURE-----\n\nx\n-----END PGP SIGNATURE-----\n"))
+
+		res := c.cliErr("takeover", c.repo)
+		if !strings.Contains(res.combined(), "metadata-signature-invalidated") {
+			c.t.Errorf("takeover did not report the signature it would invalidate:\n%s", res.combined())
+		}
+		if !strings.Contains(res.combined(), "not safe to republish") {
+			c.t.Errorf("the verdict does not say the takeover is unsafe:\n%s", res.combined())
+		}
+	}},
+
 	{name: "copy_exact_replica", run: func(c *tctx, r rpmSet) {
 		c.add(r.hello, r.libfoo)
 		dst := c.h.RepoURL(c.t)
