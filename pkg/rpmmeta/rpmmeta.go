@@ -12,6 +12,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -95,11 +96,12 @@ func FromFile(path string, opt Options) (*repodata.Package, error) {
 	return out, nil
 }
 
-func baseName(path string) string {
-	if i := strings.LastIndexByte(path, '/'); i >= 0 {
-		return path[i+1:]
-	}
-	return path
+// baseName is filepath.Base restricted to what a location needs. It must be
+// filepath, not path: the argument is a local filesystem path, so on Windows
+// the separator is a backslash and a path-only split would return the whole
+// path and publish a package at "..\..\somewhere\hello.rpm".
+func baseName(p string) string {
+	return filepath.Base(p)
 }
 
 // convert maps a parsed rpm.Package into our metadata model (everything that

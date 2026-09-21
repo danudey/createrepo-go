@@ -69,6 +69,12 @@ jobs:
     defaults:
       run:
         working-directory: ${{ env.WORKING_DIRECTORY }}
+        # bash on every runner, including Windows, where the default is pwsh.
+        # PowerShell re-splits `-coverprofile=coverage.out` and hands go test a
+        # stray `.out` package argument, so the step fails whatever the tests
+        # did. Uniform shells also mean a command that works on one runner is
+        # not quietly different on another.
+        shell: bash
     strategy:
       # One platform failing should not hide the others.
       fail-fast: false

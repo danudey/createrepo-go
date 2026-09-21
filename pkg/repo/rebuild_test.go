@@ -229,8 +229,11 @@ func TestRebuildCleanups(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, strayRPM), []byte("not really an rpm"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	staleMeta := filepath.Join("repodata", "leftover-primary.xml.gz")
-	if err := os.WriteFile(filepath.Join(dir, staleMeta), []byte("junk"), 0o644); err != nil {
+	// Repo-relative keys are always forward-slashed, whatever the local
+	// separator, because that is what a plan reports and what a backend stores.
+	// filepath.FromSlash turns one back into a local path.
+	staleMeta := "repodata/leftover-primary.xml.gz"
+	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(staleMeta)), []byte("junk"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -249,7 +252,7 @@ func TestRebuildCleanups(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, strayRPM)); !os.IsNotExist(err) {
 		t.Errorf("stray RPM not deleted (err=%v)", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, staleMeta)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(staleMeta))); !os.IsNotExist(err) {
 		t.Errorf("stale metadata not deleted (err=%v)", err)
 	}
 	// The referenced RPM must survive.

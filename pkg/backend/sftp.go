@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/pkg/sftp"
@@ -110,7 +111,9 @@ func hostKeyCallback() (ssh.HostKeyCallback, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sftp: locating known_hosts: %w%s", err, insecureHint)
 	}
-	kh := path.Join(home, ".ssh", "known_hosts")
+	// filepath, not path: home is a local filesystem path, and on Windows
+	// path.Join would produce C:\Users\someone/.ssh/known_hosts.
+	kh := filepath.Join(home, ".ssh", "known_hosts")
 	cb, err := knownhosts.New(kh)
 	if err != nil {
 		return nil, fmt.Errorf("sftp: reading %s: %w%s", kh, err, insecureHint)

@@ -41,6 +41,10 @@ func writeKnownHosts(t *testing.T, lines string) {
 		}
 	}
 	t.Setenv("HOME", home)
+	// os.UserHomeDir, which hostKeyCallback uses, reads USERPROFILE on Windows
+	// and HOME everywhere else. Setting only HOME would leave these tests
+	// reading the runner's real known_hosts.
+	t.Setenv("USERPROFILE", home)
 }
 
 func TestHostKeyCallbackMissingKnownHosts(t *testing.T) {
