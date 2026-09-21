@@ -176,7 +176,7 @@ func (r *Repo) GetToFile(ctx context.Context, href string) (string, error) {
 		return "", err
 	}
 	defer rc.Close()
-	f, err := os.CreateTemp("", "cr-resign-*-"+path.Base(href))
+	f, err := os.CreateTemp("", "cr-resign-*-"+tempSuffix(href))
 	if err != nil {
 		return "", err
 	}

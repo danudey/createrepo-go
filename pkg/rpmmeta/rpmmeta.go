@@ -1,8 +1,8 @@
 // Package rpmmeta extracts rpm-md repository metadata from RPM package files.
-// It wraps github.com/cavaliergopher/rpm for header parsing but reads the file
-// list directly from the header tags, because that library's Files() helper
-// panics on packages that use the modern FILESIZES64 tag (5008) instead of the
-// legacy FILESIZES tag (1028).
+// It wraps internal/rpm (a copy of github.com/cavaliergopher/rpm) for header
+// parsing but reads the file list directly from the header tags, because that
+// library's Files() helper panics on packages that use the modern FILESIZES64
+// tag (5008) instead of the legacy FILESIZES tag (1028).
 package rpmmeta
 
 import (
@@ -12,10 +12,11 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
-	"github.com/cavaliergopher/rpm"
+	"github.com/danudey/createrepo-go/internal/rpm"
 	"github.com/danudey/createrepo-go/pkg/repodata"
 )
 
@@ -95,11 +96,12 @@ func FromFile(path string, opt Options) (*repodata.Package, error) {
 	return out, nil
 }
 
-func baseName(path string) string {
-	if i := strings.LastIndexByte(path, '/'); i >= 0 {
-		return path[i+1:]
-	}
-	return path
+// baseName is filepath.Base restricted to what a location needs. It must be
+// filepath, not path: the argument is a local filesystem path, so on Windows
+// the separator is a backslash and a path-only split would return the whole
+// path and publish a package at "..\..\somewhere\hello.rpm".
+func baseName(p string) string {
+	return filepath.Base(p)
 }
 
 // convert maps a parsed rpm.Package into our metadata model (everything that

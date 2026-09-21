@@ -102,6 +102,7 @@ createrepo-go remove  <repo> <name>...  # remove packages (by name; --arch/--evr
 createrepo-go rebuild <repo>            # reconcile an existing repo against updated options
 createrepo-go copy    <src> <dst>       # copy/mirror a repository to another location
 createrepo-go create  <repo>            # initialize an empty repository (records config)
+createrepo-go takeover <repo>           # report what managing an existing repo with this tool would change
 createrepo-go list    <repo>            # list packages
 createrepo-go verify  <repo>            # check the published RPMs match the metadata
 createrepo-go check   <repo>            # deep-validate metadata + packages (levels)
@@ -254,6 +255,99 @@ Notes:
 - `--remove-unreferenced-rpms` / `--remove-stale-metadata` require a backend that
   can enumerate its contents (local, SSH/SFTP, S3, GCS). They are unavailable on
   the read-only HTTP backend.
+
+## Taking over an existing repository (`takeover`)
+
+`takeover` answers the question that comes before any of the above when the
+repository was created by something else: **what would this tool do to it?**
+
+```sh
+createrepo-go takeover s3://my-bucket/el9 --target rhel9
+```
+
+It analyses the published repository and reports exactly what republishing it
+with the given settings would change — while changing nothing itself. The
+analysis is a real dry run, not a description of one: the repository is loaded,
+the reconciliation the settings imply is applied to the in-memory index, and the
+commit plan is computed from it. Every flag that affects a publish affects the
+report (`--target`, `--compression`, `--location-prefix`, `--changelog-limit`,
+`--sign-metadata`/`--gpg-key-id`, `--prune-older`, `--from-packages`), so the
+way to find out what a setting costs is to pass it.
+
+The report has four parts: the repository as published, the settings a republish
+would use, what it would write, move and delete, and a per-package diff of the
+metadata that would change. Then the findings, ranked:
+
+| Severity | Meaning |
+| --- | --- |
+| `blocking` | republishing as configured breaks something clients rely on |
+| `advisory` | the repository changes in a way worth knowing about first |
+| `info` | observed; changes nothing |
+
+The command exits non-zero while any blocking finding stands, so it can gate a
+migration (`--json` emits the whole report for a CI step to act on).
+
+### What it catches
+
+- **Metadata this tool does not generate.** It writes primary, filelists and
+  other, and a publish deletes the files the superseded `repomd.xml` referenced —
+  so comps (`dnf group install`), updateinfo (`dnf update --security`), modulemd
+  and anything else the repository publishes would be **lost**. Each is reported
+  with what depends on it; sqlite databases are only advisory, because nothing on
+  RHEL 8+ reads them.
+- **A metadata signature that would stop verifying.** A republish rewrites
+  `repomd.xml` and leaves `repomd.xml.asc` beside it, so a signed repository that
+  is not re-signed breaks every client with `repo_gpgcheck=1`. Signing with a
+  *different* key from the one that signed it is reported too — the signature is
+  read to identify its issuer, no keyring needed.
+- **Packages indexed with another checksum algorithm.** The metadata stays
+  readable by dnf, but every checksum this tool computes is a sha256 and would
+  disagree with a sha512 pkgid: `verify` would report a mismatch on every package
+  and re-adding one would fail. `--from-packages` resolves it by recomputing.
+- **Metadata that does not describe the stored files.** With `--from-packages`
+  each RPM is re-read and compared field by field, so a package republished over
+  another under the same name is found before the takeover, not after.
+- **Where the packages actually live**, versus where `--location-prefix` would
+  put the next one; relocation (and whether the backend can do it server-side);
+  `xml:base` pointing clients at another host; RPMs the metadata does not
+  reference; repodata left over from earlier publishes; packages the metadata
+  references but the repository does not hold; and a backend that can be read but
+  never written (plain HTTP).
+
+Metadata compressed with xz or bzip2 is read as well as gzip and zstd, since
+that is what other tooling publishes (xz needs the `xz` command).
+
+### Claiming the repository
+
+```sh
+# Look first.
+createrepo-go takeover /srv/repo --target rhel8 --from-packages
+
+# Record the settings — this writes createrepo-go.json and nothing else.
+createrepo-go takeover /srv/repo --target rhel8 --adopt --yes \
+    --repo-name "Legacy EL8" --repo-url https://downloads.example.com/el8
+
+# Then publish with them, when the findings say it is safe to.
+createrepo-go rebuild /srv/repo --from-packages
+```
+
+`--adopt` is deliberately the smallest possible step: it writes the config file
+and publishes nothing, so the repository keeps serving exactly what it served
+before while later commands inherit the settings. The location prefix it records
+is the directory the packages are *already* in (unless `--location-prefix` says
+to move them), so a later `add` joins them instead of starting a second
+directory.
+
+```
+--from-packages    re-read every RPM and compare it against the metadata
+                   (default: on for local packages, off for remote)
+--prune-older      report what dropping superseded versions would do
+--sample N         packages to download to identify who signed them (default 1, 0 to skip)
+--json             emit the full report as JSON
+--adopt            record the settings in createrepo-go.json (publishes nothing)
+--repo-name/--repo-url  identity to record with --adopt
+-y, --yes          skip the --adopt confirmation prompt
+```
 
 ## Copying a repository (`copy`)
 
@@ -610,6 +704,8 @@ The CLI is a thin wrapper over reusable packages:
   `RemoteHasher` capability for download-free validation.
 - `pkg/repo` — load, mutate and publish a repository (`Open`/`AddRPM`/`Remove`/
   `Commit`); `OpenWith` accepts a custom backend.
+- `pkg/takeover` — analyse a repository this tool did not create and report what
+  publishing it with a given set of settings would change (`takeover.Analyze`).
 - `pkg/repocheck` — layered validation (`metadata`/`head`/`fetch`) of a
   repository over any backend, including `.repo`-file and `$releasever` handling
   (`repocheck.Run`).

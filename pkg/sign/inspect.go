@@ -2,6 +2,7 @@ package sign
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,8 +11,9 @@ import (
 	"strings"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
-	"github.com/cavaliergopher/rpm"
+	"github.com/danudey/createrepo-go/internal/rpm"
 )
 
 // rpm signature-header tag identifiers holding an OpenPGP signature. The rpm
@@ -26,21 +28,38 @@ const (
 	tagSigPGP5      = 1006
 )
 
-// PackageKeyIDs reads the signature header of the RPM at path and reports the
-// OpenPGP key ids (lowercase 16-hex) that signed it, along with whether the
-// package carries a signature at all. The two answers are distinct: signed
-// with no ids means the signature is in a format this build cannot read, which
-// callers must treat as "unknown" rather than "unsigned".
-func PackageKeyIDs(path string) (ids []string, signed bool, err error) {
+// PackageSignature describes the OpenPGP signatures an RPM carries.
+type PackageSignature struct {
+	// Signed reports whether the package carries any signature at all.
+	Signed bool
+	// KeyIDs are the issuers (lowercase 16-hex long key ids) that could be
+	// identified. Signed with no ids means the signature is in a format this
+	// build cannot read, which callers must treat as "unknown" rather than
+	// "unsigned".
+	KeyIDs []string
+	// HeaderV4 reports whether the legacy v4 header signature (RSAHEADER or
+	// DSAHEADER) is present. It is the only signature rpm 4.14/4.16 — RHEL 8
+	// and 9 — can read, so a package without it counts as unsigned there even
+	// when it carries a newer OPENPGP signature.
+	HeaderV4 bool
+	// Payload reports whether a header+payload signature (the PGP/GPG tags) is
+	// present.
+	Payload bool
+}
+
+// InspectPackage reads the signature header of the RPM at path and reports what
+// signatures it carries and who made them.
+func InspectPackage(path string) (PackageSignature, error) {
+	var sig PackageSignature
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, false, err
+		return sig, err
 	}
 	defer f.Close()
 
 	pkg, err := rpm.Read(f)
 	if err != nil {
-		return nil, false, fmt.Errorf("read rpm %s: %w", path, err)
+		return sig, fmt.Errorf("read rpm %s: %w", path, err)
 	}
 
 	seen := map[string]bool{}
@@ -49,8 +68,60 @@ func PackageKeyIDs(path string) (ids []string, signed bool, err error) {
 		if len(raw) == 0 {
 			continue
 		}
-		signed = true
+		sig.Signed = true
+		switch tag {
+		case tagSigRSAHeader, tagSigDSAHeader:
+			sig.HeaderV4 = true
+		default:
+			sig.Payload = true
+		}
 		id, ok := signatureKeyID(raw)
+		if !ok || seen[id] {
+			continue
+		}
+		seen[id] = true
+		sig.KeyIDs = append(sig.KeyIDs, id)
+	}
+	sort.Strings(sig.KeyIDs)
+	return sig, nil
+}
+
+// PackageKeyIDs reads the signature header of the RPM at path and reports the
+// OpenPGP key ids (lowercase 16-hex) that signed it, along with whether the
+// package carries a signature at all. See InspectPackage for the fuller answer.
+func PackageKeyIDs(path string) (ids []string, signed bool, err error) {
+	sig, err := InspectPackage(path)
+	return sig.KeyIDs, sig.Signed, err
+}
+
+// ArmoredSignatureIssuers reports the key ids (lowercase 16-hex) that made an
+// ASCII-armored detached signature, such as a repository's repomd.xml.asc. It
+// reads the signature packet itself, so it answers "who signed this?" without
+// needing the signing key to be available locally.
+func ArmoredSignatureIssuers(armored []byte) ([]string, error) {
+	block, err := armor.Decode(bytes.NewReader(armored))
+	if err != nil {
+		return nil, fmt.Errorf("decode armored signature: %w", err)
+	}
+	var ids []string
+	seen := map[string]bool{}
+	r := packet.NewReader(block.Body)
+	for {
+		p, err := r.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			// Whatever was read before the unreadable packet still identifies
+			// a signer, so it is returned alongside the error.
+			sort.Strings(ids)
+			return ids, fmt.Errorf("read signature packet: %w", err)
+		}
+		s, ok := p.(*packet.Signature)
+		if !ok {
+			continue
+		}
+		id, ok := issuerKeyID(s)
 		if !ok || seen[id] {
 			continue
 		}
@@ -58,7 +129,7 @@ func PackageKeyIDs(path string) (ids []string, signed bool, err error) {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	return ids, signed, nil
+	return ids, nil
 }
 
 // signatureKeyID extracts the issuer key id from a raw (binary) OpenPGP
@@ -74,15 +145,23 @@ func signatureKeyID(raw []byte) (string, bool) {
 		if !ok {
 			continue
 		}
-		if sig.IssuerKeyId != nil {
-			return fmt.Sprintf("%016x", *sig.IssuerKeyId), true
-		}
-		// A v6 signature carries only the fingerprint; its trailing bytes are
-		// the key id by construction.
-		if n := len(sig.IssuerFingerprint); n >= 8 {
-			return fmt.Sprintf("%x", sig.IssuerFingerprint[n-8:]), true
+		if id, ok := issuerKeyID(sig); ok {
+			return id, true
 		}
 	}
+}
+
+// issuerKeyID reports the long key id of a signature's issuer.
+func issuerKeyID(sig *packet.Signature) (string, bool) {
+	if sig.IssuerKeyId != nil {
+		return fmt.Sprintf("%016x", *sig.IssuerKeyId), true
+	}
+	// A v6 signature carries only the fingerprint; its trailing bytes are the
+	// key id by construction.
+	if n := len(sig.IssuerFingerprint); n >= 8 {
+		return fmt.Sprintf("%x", sig.IssuerFingerprint[n-8:]), true
+	}
+	return "", false
 }
 
 // SameSigner reports whether two sets of key ids overlap, i.e. whether the same

@@ -362,6 +362,23 @@ func destinationMatches(ctx context.Context, dst backend.Backend, obj SourceObje
 	return obj.Size >= 0 && fi.Size == obj.Size, nil
 }
 
+// tempSuffix reduces a repository href to something os.CreateTemp will accept
+// at the tail of a pattern. An href comes from a remote repository's metadata,
+// so it holds whatever that publisher wrote; os.CreateTemp rejects a pattern
+// containing a path separator, and on Windows a backslash is one, so path.Base
+// alone is not enough.
+func tempSuffix(href string) string {
+	base := path.Base(href)
+	if i := strings.LastIndexAny(base, `\/`); i >= 0 {
+		base = base[i+1:]
+	}
+	switch base {
+	case "", ".", "..":
+		return "obj"
+	}
+	return base
+}
+
 // fetchToTemp streams an object from be into a temporary file, verifying its
 // size and (when the metadata records one) its checksum. The caller owns the
 // returned file and must remove it.
@@ -372,7 +389,7 @@ func fetchToTemp(ctx context.Context, be backend.Backend, obj SourceObject) (str
 	}
 	defer rc.Close()
 
-	f, err := os.CreateTemp("", "cr-copy-*-"+path.Base(obj.Path))
+	f, err := os.CreateTemp("", "cr-copy-*-"+tempSuffix(obj.Path))
 	if err != nil {
 		return "", 0, err
 	}

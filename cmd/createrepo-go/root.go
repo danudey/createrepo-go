@@ -125,7 +125,7 @@ never downloaded.`,
 	pf.StringVar(&gf.gpgPass, "gpg-passphrase", os.Getenv("CREATEREPO_GPG_PASSPHRASE"), "passphrase for the signing key (or set CREATEREPO_GPG_PASSPHRASE)")
 	pf.StringArrayVar(&gf.keyrings, "keyring", nil, "public keyring file for --verify-sigs (repeatable)")
 
-	root.AddCommand(addCmd(), removeCmd(), rebuildCmd(), copyCmd(), createCmd(), listCmd(), verifyCmd(), checkCmd())
+	root.AddCommand(addCmd(), removeCmd(), rebuildCmd(), copyCmd(), createCmd(), takeoverCmd(), listCmd(), verifyCmd(), checkCmd())
 	return root
 }
 

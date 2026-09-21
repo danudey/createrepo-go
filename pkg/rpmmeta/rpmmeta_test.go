@@ -2,7 +2,9 @@ package rpmmeta
 
 import (
 	"bytes"
-	"os/exec"
+	"compress/gzip"
+	"io"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -104,7 +106,19 @@ func readGzReference(t *testing.T, kind string) []byte {
 	if len(matches) != 1 {
 		t.Fatalf("expected one %s.xml.gz, found %v", kind, matches)
 	}
-	out, err := exec.Command("zcat", matches[0]).Output()
+	// Decompressed in-process rather than with zcat: macOS ships the BSD zcat,
+	// which only accepts .Z, and Windows ships no zcat at all.
+	f, err := os.Open(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+	out, err := io.ReadAll(zr)
 	if err != nil {
 		t.Fatal(err)
 	}

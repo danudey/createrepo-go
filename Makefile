@@ -15,7 +15,8 @@ test: tidy
 test-e2e: tidy
 	go tool gotestsum --format testname -- -tags e2e ./test/e2e/... -timeout 600s
 
-# Regenerate the RPM + createrepo_c reference fixtures (needs rpmbuild + createrepo_c).
+# Regenerate the RPM + createrepo_c reference fixtures (needs rpmbuild +
+# createrepo_c). The fixtures are committed, so commit the result.
 fixtures:
 	./reference/gen.sh
 

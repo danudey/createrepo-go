@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -85,7 +86,9 @@ func TestCredentialCacheReusedAcrossProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat cache file: %v", err)
 	}
-	if perm := fi.Mode().Perm(); perm != 0o600 {
+	// Windows has no Unix permission bits: os.OpenFile's mode only sets the
+	// read-only attribute, so the file always reads back as 0666.
+	if perm := fi.Mode().Perm(); perm != 0o600 && runtime.GOOS != "windows" {
 		t.Errorf("cache file mode = %v, want 0600: it holds a secret", perm)
 	}
 }

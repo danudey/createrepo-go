@@ -2,6 +2,11 @@
 # Regenerate the test fixtures: build the sample RPMs and a createrepo_c
 # reference repository that the golden tests compare against.
 # Requires: rpmbuild, createrepo_c.
+#
+# The output is committed. The tests assert on byte offsets inside these exact
+# RPMs, and CI runs on macOS and Windows where rpmbuild does not exist, so the
+# fixtures cannot be rebuilt per run. Commit whatever this script produces, and
+# expect the golden expectations to need updating when it changes anything.
 set -euo pipefail
 cd "$(dirname "$0")"
 
