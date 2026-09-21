@@ -80,6 +80,13 @@ linters:
         # gosec reports separately as G305.
         - G304
   exclusions:
+    paths:
+      # internal/rpm is a copy of github.com/cavaliergopher/rpm, kept as close
+      # to upstream as possible so a future release can be diffed against it.
+      # Linting someone else's code produces findings nobody here will act on,
+      # and acting on them would destroy the only property that makes the copy
+      # maintainable. See internal/rpm/doc.go for why the copy exists.
+      - ^internal/rpm/
     rules:
       # noctx's HTTP and net.Dial checks are worth having; its exec.Command
       # check is not. Every subprocess here is a short-lived local gpg,

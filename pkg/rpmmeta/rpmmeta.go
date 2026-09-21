@@ -1,8 +1,8 @@
 // Package rpmmeta extracts rpm-md repository metadata from RPM package files.
-// It wraps github.com/cavaliergopher/rpm for header parsing but reads the file
-// list directly from the header tags, because that library's Files() helper
-// panics on packages that use the modern FILESIZES64 tag (5008) instead of the
-// legacy FILESIZES tag (1028).
+// It wraps internal/rpm (a copy of github.com/cavaliergopher/rpm) for header
+// parsing but reads the file list directly from the header tags, because that
+// library's Files() helper panics on packages that use the modern FILESIZES64
+// tag (5008) instead of the legacy FILESIZES tag (1028).
 package rpmmeta
 
 import (
@@ -15,7 +15,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/cavaliergopher/rpm"
+	"github.com/danudey/createrepo-go/internal/rpm"
 	"github.com/danudey/createrepo-go/pkg/repodata"
 )
 

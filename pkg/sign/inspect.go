@@ -13,7 +13,7 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
-	"github.com/cavaliergopher/rpm"
+	"github.com/danudey/createrepo-go/internal/rpm"
 )
 
 // rpm signature-header tag identifiers holding an OpenPGP signature. The rpm
