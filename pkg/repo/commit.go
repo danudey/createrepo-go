@@ -104,12 +104,17 @@ func (r *Repo) Commit(ctx context.Context) (*Plan, error) {
 		}
 	}
 
-	// 2. Upload RPMs that need transferring.
+	// 2. Upload RPMs that need transferring. This is the only part of a commit
+	// whose cost is the repository's size rather than its metadata's, so it is
+	// the part progress reporting covers.
+	r.opt.Tracker.Begin("upload", len(plan.Uploads), plan.BytesToUpload)
 	for _, a := range plan.Uploads {
 		if err := r.uploadFile(ctx, a.Location, a.Local); err != nil {
+			r.opt.Tracker.End()
 			return nil, fmt.Errorf("upload %s: %w", a.Location, err)
 		}
 	}
+	r.opt.Tracker.End()
 
 	// 3. Write new metadata blobs (checksum-named; no collision with current).
 	for href, data := range meta.files {
@@ -460,7 +465,9 @@ func (r *Repo) uploadFile(ctx context.Context, href, local string) error {
 	if err != nil {
 		return err
 	}
-	return r.be.Put(ctx, href, f, fi.Size())
+	item := r.opt.Tracker.Item(path.Base(href), fi.Size())
+	defer item.Done()
+	return r.be.Put(ctx, href, item.Reader(f), fi.Size())
 }
 
 func (r *Repo) putBytes(ctx context.Context, href string, data []byte) error {

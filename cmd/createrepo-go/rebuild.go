@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
+	"github.com/danudey/createrepo-go/pkg/progress"
 	"github.com/danudey/createrepo-go/pkg/repo"
 	"github.com/danudey/createrepo-go/pkg/repodata"
 )
@@ -136,7 +137,7 @@ The cleanup flags require a backend that can list its contents (not plain HTTP).
 			// confirm unless the operator opted out.
 			if !assumeYes {
 				if !promptYesNo(cmd, "Proceed with these changes?") {
-					fmt.Fprintln(cmd.OutOrStdout(), "aborted; no changes made")
+					fmt.Fprintln(stdout(cmd), "aborted; no changes made")
 					return nil
 				}
 			}
@@ -177,7 +178,7 @@ The cleanup flags require a backend that can list its contents (not plain HTTP).
 // plainly that it is publishing the metadata it was given rather than checking
 // it. It returns nil when no refresh was performed.
 func refreshFromPackages(cmd *cobra.Command, r *repo.Repo, requested bool) (*repo.RefreshResult, error) {
-	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
+	out, errOut := stdout(cmd), stderr(cmd)
 	local := backend.IsLocal(r.Backend())
 	refresh := local
 	if cmd.Flags().Changed("from-packages") {
@@ -241,8 +242,16 @@ func resignPackages(cmd *cobra.Command, r *repo.Repo) (func(), error) {
 			c()
 		}
 	}
-	out := cmd.OutOrStdout()
-	for _, p := range r.ResignTargets() {
+	out := stdout(cmd)
+	targets := r.ResignTargets()
+	var toDownload int64
+	for _, p := range targets {
+		toDownload += p.SizePackage
+	}
+	prog.Begin("download", len(targets), toDownload)
+	defer prog.End()
+
+	for _, p := range targets {
 		loc := p.Location
 		tmp, err := r.GetToFile(ctx(cmd), loc)
 		if err != nil {
@@ -306,7 +315,7 @@ type rebuildReport struct {
 // printRebuildReport renders the before/after summary. Only lines with something
 // to report are shown.
 func printRebuildReport(cmd *cobra.Command, rep rebuildReport) {
-	out := cmd.OutOrStdout()
+	out := stdout(cmd)
 	fmt.Fprintf(out, "Rebuild plan for %s\n", rep.location)
 	fmt.Fprintf(out, "  packages:            %d -> %d (%+d)\n",
 		rep.beforeCount, rep.afterCount, rep.afterCount-rep.beforeCount)
@@ -369,7 +378,7 @@ func printRebuildReport(cmd *cobra.Command, rep rebuildReport) {
 // promptYesNo asks question on stdout and reads a line from the command's input,
 // returning true only for an explicit yes. EOF or a blank line means no.
 func promptYesNo(cmd *cobra.Command, question string) bool {
-	fmt.Fprintf(cmd.OutOrStdout(), "%s [y/N] ", question)
+	fmt.Fprintf(stdout(cmd), "%s [y/N] ", question)
 	reader := bufio.NewReader(cmd.InOrStdin())
 	line, err := reader.ReadString('\n')
 	if err != nil && line == "" {
@@ -383,16 +392,7 @@ func promptYesNo(cmd *cobra.Command, question string) bool {
 	}
 }
 
-// humanBytes formats a byte count with a binary (KiB/MiB/...) suffix.
-func humanBytes(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	div, exp := int64(unit), 0
-	for m := n / unit; m >= unit; m /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
-}
+// humanBytes formats a byte count with a binary (KiB/MiB/...) suffix. It is the
+// same rendering the progress display uses, so a size reported before a
+// transfer and the one reported during it read alike.
+func humanBytes(n int64) string { return progress.Bytes(n) }

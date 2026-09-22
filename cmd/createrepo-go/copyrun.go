@@ -22,7 +22,7 @@ import (
 func copyExact(cmd *cobra.Command, src *repo.Repo, srcLoc string, srcCfg *repoconfig.Config, srcSig []byte,
 	dstBE backend.Backend, dstLoc string, dstExists bool, cf *copyFlags, verifier *sign.Verifier,
 ) error {
-	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
+	out, errOut := stdout(cmd), stderr(cmd)
 	defer closeBackend(dstBE)
 
 	objs, listed, err := src.Objects(ctx(cmd))
@@ -51,9 +51,10 @@ func copyExact(cmd *cobra.Command, src *repo.Repo, srcLoc string, srcCfg *repoco
 		prefix = dryRunPrefix
 	}
 	stats, err := repo.CopyExact(ctx(cmd), src.Backend(), dstBE, objs, repo.CopyOptions{
-		DryRun: gf.dryRun,
-		Force:  gf.force,
-		Prune:  prune,
+		DryRun:  gf.dryRun,
+		Force:   gf.force,
+		Prune:   prune,
+		Tracker: prog,
 		Inspect: func(obj repo.SourceObject, local string) error {
 			if verifier == nil || obj.Kind != repo.ObjectPackage {
 				return nil
@@ -102,7 +103,7 @@ func resignCopiedMetadata(cmd *cobra.Command, src *repo.Repo, dstBE backend.Back
 	if err != nil {
 		return fmt.Errorf("sign repomd.xml: %w", err)
 	}
-	out := cmd.OutOrStdout()
+	out := stdout(cmd)
 	if gf.dryRun {
 		fmt.Fprintln(out, "[dry-run] sign    repodata/repomd.xml.asc")
 		return nil
@@ -200,6 +201,7 @@ func copyRebuilding(cmd *cobra.Command, run copyRun) error {
 		XMLBase:         cf.baseURL,
 		RebuildMetadata: cf.rebuildMetadata,
 		Sign:            signFn,
+		Tracker:         prog,
 		Inspect: func(p *repodata.Package, local string) error {
 			if run.verifier == nil {
 				return nil
@@ -290,7 +292,7 @@ func checkPackageSigners(cmd *cobra.Command, run copyRun, dst *repo.Repo, dstCfg
 	case !srcSig.signed && !dstSig.signed:
 		return nil // neither side is signed: nothing can conflict
 	case srcSig.unknown() || dstSig.unknown():
-		fmt.Fprintln(cmd.ErrOrStderr(), "warning: --update: could not determine which key signed one or both repositories' packages; not checking that they match")
+		fmt.Fprintln(stderr(cmd), "warning: --update: could not determine which key signed one or both repositories' packages; not checking that they match")
 		return nil
 	case sign.SameSigner(srcSig.ids, dstSig.ids):
 		return nil

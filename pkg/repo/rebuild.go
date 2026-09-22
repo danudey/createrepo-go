@@ -176,11 +176,20 @@ func (r *Repo) GetToFile(ctx context.Context, href string) (string, error) {
 		return "", err
 	}
 	defer rc.Close()
-	f, err := os.CreateTemp("", "cr-resign-*-"+tempSuffix(href))
+	// The metadata already knows how large the object is, so the download can
+	// be reported against its expected size without asking the backend again.
+	var size int64
+	if p := r.idx.ByLocation(href); p != nil {
+		size = p.SizePackage
+	}
+	item := r.opt.Tracker.Item(path.Base(href), size)
+	defer item.Done()
+
+	f, err := os.CreateTemp("", "cr-resign-*-"+path.Base(href))
 	if err != nil {
 		return "", err
 	}
-	if _, err := io.Copy(f, rc); err != nil {
+	if _, err := io.Copy(f, item.Reader(rc)); err != nil {
 		f.Close()
 		os.Remove(f.Name())
 		return "", err

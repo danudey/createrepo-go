@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
+	"github.com/danudey/createrepo-go/pkg/progress"
 	"github.com/danudey/createrepo-go/pkg/repo"
 	"github.com/danudey/createrepo-go/pkg/sign"
 )
@@ -25,6 +27,9 @@ type globalFlags struct {
 	changelogLimit int
 	dryRun         bool
 	force          bool
+
+	// progress turns on the transfer progress display (see pkg/progress).
+	progress bool
 
 	// pruneBreakDeps permits add/rebuild --prune-older to drop a version even
 	// when another package still depends on that specific version.
@@ -87,6 +92,17 @@ var profileAliases = map[string]string{
 
 var gf globalFlags
 
+// prog is the progress display, or nil when --progress was not given. A nil
+// tracker is inert, so it is passed around without being checked for.
+var prog *progress.Tracker
+
+// stdout and stderr return a command's output writers routed through the
+// progress display, so that a line printed while the bars are up erases them
+// first rather than landing on top of them. Without a display they are the
+// command's own writers, unchanged.
+func stdout(cmd *cobra.Command) io.Writer { return prog.Wrap(cmd.OutOrStdout()) }
+func stderr(cmd *cobra.Command) io.Writer { return prog.Wrap(cmd.ErrOrStderr()) }
+
 func rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "createrepo-go",
@@ -114,6 +130,7 @@ never downloaded.`,
 	pf.StringVar(&gf.awsRegion, "region", "", "AWS region for S3 access (sets AWS_REGION); the bucket's actual region is detected and used if it differs")
 	pf.IntVar(&gf.changelogLimit, "changelog-limit", 10, "most-recent changelog entries to keep per package (0 = all)")
 	pf.BoolVar(&gf.dryRun, "dry-run", false, "show what would change without transferring anything")
+	pf.BoolVar(&gf.progress, "progress", false, "show progress for uploads, downloads and copies: a bar for the current transfer and one for the operation as a whole (written to stderr)")
 	pf.BoolVar(&gf.force, "force", false, "overwrite a remote file whose content differs from the local RPM")
 	pf.BoolVar(&gf.insecureIgnoreHostKey, "insecure-ignore-host-key", false, "skip SSH host key verification for sftp:// locations (by default an unreadable ~/.ssh/known_hosts, or a host missing from it, is an error)")
 
@@ -135,6 +152,9 @@ func preRunE(cmd *cobra.Command, args []string) error {
 	if err := applyProfile(cmd, args); err != nil {
 		return err
 	}
+	// The display goes to stderr: it is not part of a command's output, and a
+	// caller piping that output somewhere should not be sent bars along with it.
+	prog = progress.New(cmd.ErrOrStderr(), gf.progress)
 	applyAWSEnv()
 	backend.InsecureIgnoreHostKey = gf.insecureIgnoreHostKey
 	// rebuild --resign-packages is an explicit instruction to sign the packages,
@@ -229,6 +249,7 @@ func repoOptions(create bool) (repo.Options, error) {
 		PruneBreakDeps:         gf.pruneBreakDeps,
 		RemoveUnreferencedRPMs: gf.removeUnreferencedRPMs,
 		RemoveStaleMetadata:    gf.removeStaleMetadata,
+		Tracker:                prog,
 	}
 	if gf.checksum != "sha256" {
 		return opts, fmt.Errorf("only sha256 checksums are supported (got %q)", gf.checksum)

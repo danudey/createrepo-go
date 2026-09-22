@@ -124,7 +124,7 @@ Examples:
 // the destination may look like, then either replicate it byte for byte or
 // rebuild it from the selected packages.
 func runCopy(cmd *cobra.Command, srcLoc, dstLoc string, cf *copyFlags) error {
-	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
+	out, errOut := stdout(cmd), stderr(cmd)
 
 	if err := cf.validate(); err != nil {
 		return err
@@ -304,11 +304,11 @@ func verificationKeyrings(cmd *cobra.Command, srcCfg *repoconfig.Config, skip bo
 	}
 	path, cleanup, err := sign.ExportPublicKey(srcCfg.GPGKeyID)
 	if err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: the source repository is signed with %s but that key is not available locally (%v); signatures will not be verified. Pass --keyring to supply it.\n",
+		fmt.Fprintf(stderr(cmd), "warning: the source repository is signed with %s but that key is not available locally (%v); signatures will not be verified. Pass --keyring to supply it.\n",
 			srcCfg.GPGKeyID, err)
 		return nil, noop
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "verifying against the source's recorded signing key %s\n", srcCfg.GPGKeyID)
+	fmt.Fprintf(stdout(cmd), "verifying against the source's recorded signing key %s\n", srcCfg.GPGKeyID)
 	return []string{path}, cleanup
 }
 
@@ -317,7 +317,7 @@ func verificationKeyrings(cmd *cobra.Command, srcCfg *repoconfig.Config, skip bo
 // returns a nil verifier when there is no key to check against.
 func verifySourceMetadata(cmd *cobra.Command, src *repo.Repo, srcSig []byte, keyrings []string, skip bool) (*sign.Verifier, func(), error) {
 	noop := func() {}
-	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
+	out, errOut := stdout(cmd), stderr(cmd)
 
 	if skip {
 		if srcSig != nil {

@@ -99,8 +99,8 @@ Examples:
 				return fmt.Errorf("invalid --versions %q (want latest|all)", cf.versions)
 			}
 
-			out := cmd.OutOrStdout()
-			errOut := cmd.ErrOrStderr()
+			out := stdout(cmd)
+			errOut := stderr(cmd)
 
 			var logf func(format string, args ...any)
 			if cf.verbose {
@@ -124,6 +124,7 @@ Examples:
 				Concurrency: cf.concurrency,
 				Timeout:     cf.timeout,
 				RPM:         rpm,
+				Tracker:     prog,
 				Logf:        logf,
 				OnTargetStart: func(t repocheck.Target) {
 					fmt.Fprintf(out, "\n== %s ==\n   %s\n", t.Label, t.BaseURL)

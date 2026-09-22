@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -22,6 +23,11 @@ type scenario struct {
 }
 
 func base(p string) string { return filepath.Base(p) }
+
+// progressBytesRE picks the transferred and expected byte figures out of the
+// summary line --progress leaves behind ("upload: 2/2 complete, 13.9 KiB/13.9
+// KiB in 0s ...").
+var progressBytesRE = regexp.MustCompile(`complete, ([\d.]+ \w+)/([\d.]+ \w+) in`)
 
 // loc is the repo-relative location an RPM lands at with the default
 // --location-prefix ("Packages"), i.e. where a bare `add` uploads it.
@@ -78,6 +84,34 @@ var scenarios = []scenario{
 		c.wantCount(2)
 		c.wantListContains("hello", "libfoo")
 		c.verifyOK()
+	}},
+
+	{name: "add_with_progress", run: func(c *tctx, r rpmSet) {
+		// --progress wraps the reader handed to every backend, which the object
+		// stores need to keep seekable; running this against each backend is
+		// what proves the upload still works with the display on.
+		res := c.addWith([]string{"--progress"}, r.hello, r.libfoo)
+		if !strings.Contains(res.stderr, "upload: 2/2 complete") {
+			c.t.Errorf("--progress did not report the upload on stderr:\n%s", res.combined())
+		}
+		// The bytes reported must be the bytes the packages hold. On the object
+		// stores the body is read twice — hashed, then sent — so this is what
+		// proves the second pass is what gets counted rather than both.
+		if m := progressBytesRE.FindStringSubmatch(res.stderr); m == nil {
+			c.t.Errorf("no progress summary to read a byte count from:\n%s", res.stderr)
+		} else if m[1] != m[2] {
+			c.t.Errorf("progress reported %s of %s uploaded, want the two to agree:\n%s", m[1], m[2], res.stderr)
+		}
+		// The display belongs on stderr only: a caller reading the command's
+		// output must see exactly what it would have seen without --progress.
+		if strings.Contains(res.stdout, "upload: 2/2 complete") {
+			c.t.Errorf("progress reporting leaked into stdout:\n%s", res.stdout)
+		}
+		c.wantCount(2)
+		c.mustExist(loc(r.hello))
+		c.mustExist(loc(r.libfoo))
+		c.verifyOK()
+		c.checkOK("fetch")
 	}},
 
 	{name: "add_directory_recursive", run: func(c *tctx, r rpmSet) {
