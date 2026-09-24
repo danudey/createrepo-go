@@ -223,35 +223,55 @@ func TestWrapPassesWritesThrough(t *testing.T) {
 	}
 }
 
-func TestRenderedLinesFitTheTerminal(t *testing.T) {
-	tr, _ := newTestTracker(t)
+func TestTerminalShowsABarPerTransferInFlight(t *testing.T) {
+	tr, buf := newTestTracker(t)
 	tr.tty = true
-	tr.Begin("copy", 57, 6_000_000_000)
-	it := tr.Item("a-very-long-package-name-that-will-not-fit-on-one-line-1.2.3-1.el9.x86_64.rpm", 129_000_000)
-	it.Phase("get")
-	it.Add(62_000_000)
-	// A second transfer in flight is reported as a count, not a third line.
-	other := tr.Item("another.rpm", 1000)
-	defer other.Done()
+	tr.Begin("copy", 3, 3000)
+	first := tr.Item("first.rpm", 1000)
+	first.Phase("get")
+	first.Add(400)
+	second := tr.Item("second.rpm", 1000)
+	second.Add(200)
+	// Give mpb a few refresh cycles to draw both bars.
+	time.Sleep(4 * paintInterval)
+	first.Done()
+	second.Done()
+	tr.End()
 
-	tr.mu.Lock()
-	tr.rate.observe(tr.started.Add(time.Second), 62_000_000)
-	lines := tr.renderLocked()
-	tr.mu.Unlock()
-
-	if len(lines) != 2 {
-		t.Fatalf("rendered %d lines, want 2 (the current transfer and the total)", len(lines))
-	}
-	for _, l := range lines {
-		if len([]rune(l)) > 80 {
-			t.Errorf("line is %d columns wide, want at most 80:\n%s", len([]rune(l)), l)
+	got := buf.String()
+	for _, want := range []string{"first.rpm", "second.rpm", "get", "copy"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("terminal output does not show %q:\n%s", want, got)
 		}
 	}
-	if !strings.Contains(lines[0], "get") || !strings.Contains(lines[0], "(+1 more)") {
-		t.Errorf("transfer line does not name the phase and the others in flight:\n%s", lines[0])
+	if !strings.Contains(got, "copy: 2/3 complete") {
+		t.Errorf("terminal output does not end with the summary:\n%s", got)
 	}
-	if !strings.Contains(lines[1], "0/57") {
-		t.Errorf("total line does not report the item count:\n%s", lines[1])
+}
+
+func TestWrapRoutesTheDisplaysOwnOutputAboveTheBars(t *testing.T) {
+	tr, buf := newTestTracker(t)
+	tr.tty = true
+	tr.Begin("upload", 1, 100)
+	it := tr.Item("one.rpm", 100)
+	if _, err := io.WriteString(tr.Wrap(buf), "staged one.rpm\n"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	it.Done()
+	tr.End()
+	if got := buf.String(); !strings.Contains(got, "staged one.rpm\n") {
+		t.Errorf("a line written while bars were up was lost:\n%s", got)
+	}
+
+	// A writer that is not the display's (stdout piped to a file) is left alone.
+	other := &bytes.Buffer{}
+	tr.Begin("upload", 1, 100)
+	if _, err := io.WriteString(tr.Wrap(other), "line\n"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	tr.End()
+	if got := other.String(); got != "line\n" {
+		t.Errorf("a separate writer received %q, want the line unchanged", got)
 	}
 }
 

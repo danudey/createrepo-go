@@ -1,7 +1,6 @@
 package progress
 
 import (
-	"strings"
 	"testing"
 	"time"
 )
@@ -42,21 +41,21 @@ func TestDuration(t *testing.T) {
 	}
 }
 
-func TestBar(t *testing.T) {
+func TestItemMeasure(t *testing.T) {
 	cases := []struct {
-		frac float64
-		want string
+		done, size int64
+		want       string
 	}{
-		{0, "[----------]"},
-		{0.5, "[=====-----]"},
-		{1, "[==========]"},
-		// A total that turns out to be wrong must not draw outside the bar.
-		{1.5, "[==========]"},
-		{-1, "[----------]"},
+		{0, 1000, "   0%  0 B/1000 B"},
+		{512, 1024, "  50%  512 B/1.0 KiB"},
+		// A size that turns out to be wrong must not report more than all of it.
+		{2048, 1024, " 100%  2.0 KiB/1.0 KiB"},
+		// An unknown size reports the bytes alone.
+		{2048, 0, " 2.0 KiB"},
 	}
 	for _, c := range cases {
-		if got := bar(c.frac, 10); got != c.want {
-			t.Errorf("bar(%v, 10) = %q, want %q", c.frac, got, c.want)
+		if got := itemMeasure(c.done, c.size); got != c.want {
+			t.Errorf("itemMeasure(%d, %d) = %q, want %q", c.done, c.size, got, c.want)
 		}
 	}
 }
@@ -94,32 +93,20 @@ func TestPadHoldsTheColumnWidth(t *testing.T) {
 	}
 }
 
-// The bar's column is what makes the display readable while it updates: it must
-// depend on the terminal's width alone, not on the figures printed beside it.
-func TestTheBarKeepsItsColumnAsTheFiguresChange(t *testing.T) {
-	tr, _ := newTestTracker(t)
-	tr.tty = true
-	tr.Begin("copy", 2, 4_000_000)
-	it := tr.Item("some-package-1.2.3-1.el9.x86_64.rpm", 2_000_000)
-
-	var column int
-	for _, moved := range []int64{1, 900, 90_000, 1_500_000} {
-		it.Add(moved)
-		tr.mu.Lock()
-		line := tr.itemLine(it, 0, 80)
-		tr.mu.Unlock()
-		at := strings.Index(line, "[")
-		if at < 0 {
-			t.Fatalf("no bar in the transfer line:\n%s", line)
+// Every transfer's bar must start in the same column, which means the name
+// column must depend on the terminal's width alone, and leave the bar its room.
+func TestNameColumnLeavesTheBarItsRoom(t *testing.T) {
+	for _, width := range []int{defaultCols, maxCols} {
+		n := nameCols(width)
+		if n < minName {
+			t.Errorf("nameCols(%d) = %d, want at least %d", width, n, minName)
 		}
-		if column == 0 {
-			column = at
-			continue
+		if used := len(label("")) + n + 2 + barRoom + measureWidth; used != width {
+			t.Errorf("at width %d the columns take %d, want exactly the width", width, used)
 		}
-		if at != column {
-			t.Errorf("the bar moved from column %d to %d after %s were transferred:\n%s",
-				column, at, Bytes(moved), line)
-		}
+	}
+	if got := nameCols(minCols); got != minName {
+		t.Errorf("nameCols(%d) = %d, want the minimum %d", minCols, got, minName)
 	}
 }
 

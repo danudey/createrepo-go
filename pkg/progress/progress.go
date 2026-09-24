@@ -3,10 +3,10 @@
 // again to hash or re-sign them, and copying a repository from one backend to
 // another.
 //
-// A Tracker shows two things at once — what the transfer in front of it is
-// doing, and how far through the whole operation that leaves it. Both are
-// driven by bytes actually read from or written to the backend, so a stalled
-// transfer looks stalled rather than merely slow.
+// A Tracker shows two things at once — what each transfer in flight is doing,
+// with a bar apiece, and how far through the whole operation that leaves it.
+// Both are driven by bytes actually read from or written to the backend, so a
+// stalled transfer looks stalled rather than merely slow.
 //
 // A nil *Tracker is a complete no-op: every method is safe to call on one, so
 // a caller that was given no tracker (progress not asked for) needs no nil
@@ -19,8 +19,10 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/vbauerster/mpb/v8"
 	"golang.org/x/term"
 )
 
@@ -42,7 +44,7 @@ const (
 )
 
 // Tracker reports the progress of one operation: an overall bar covering every
-// item it was told about, plus a bar for the item currently transferring.
+// item it was told about, plus a bar for each item currently transferring.
 type Tracker struct {
 	out   io.Writer
 	tty   bool
@@ -63,10 +65,13 @@ type Tracker struct {
 	active     []*Item
 	started    time.Time
 	rate       rateMeter
-	// lines counts the display lines currently on screen, so they can be erased
-	// before anything else is written.
-	lines     int
-	lastPlain time.Time
+	lastPlain  time.Time
+
+	// p draws the bars while an operation is open on a terminal, and total is
+	// the operation's own bar within it. Both are nil otherwise.
+	p     *mpb.Progress
+	total *mpb.Bar
+	shown shown
 }
 
 // New returns a Tracker writing its display to w, or nil when enabled is false.
@@ -125,6 +130,10 @@ func (t *Tracker) Begin(op string, items int, bytes int64) {
 	t.active = nil
 	t.started, t.lastPlain = now, now
 	t.rate.reset(now)
+	if t.tty {
+		t.startDisplayLocked()
+	}
+	t.publishLocked()
 	go t.loop(t.gen)
 }
 
@@ -148,7 +157,7 @@ func (t *Tracker) finishLocked() {
 	}
 	t.begun = false
 	t.gen++
-	t.eraseLocked()
+	t.stopDisplayLocked()
 	if t.doneItems > 0 || t.doneBytes > 0 {
 		fmt.Fprintln(t.out, t.summaryLocked(time.Now()))
 	}
@@ -175,12 +184,18 @@ func (t *Tracker) Skip(items int, bytes int64) {
 	if t.totalBytes < t.doneBytes {
 		t.totalBytes = t.doneBytes
 	}
+	t.publishLocked()
 }
 
 // Wrap returns w routed through the display, so that a line printed while bars
-// are on screen erases them first instead of being written on top of them. The
-// bars are repainted below the new line on the next tick. It returns w
+// are on screen lands above them instead of on top of them. It returns w
 // unchanged when there is no tracker.
+//
+// Only a writer that shares the display's screen is routed through it: the
+// display's own output, or another terminal (stdout and stderr both on the same
+// tty). Output going anywhere else, such as stdout piped to a file, is written
+// straight through, so the file receives exactly what it would have without
+// progress.
 func (t *Tracker) Wrap(w io.Writer) io.Writer {
 	if t == nil {
 		return w
@@ -193,11 +208,24 @@ type wrappedWriter struct {
 	w io.Writer
 }
 
-func (ww *wrappedWriter) Write(p []byte) (int, error) {
+func (ww *wrappedWriter) Write(b []byte) (int, error) {
 	ww.t.mu.Lock()
-	defer ww.t.mu.Unlock()
-	ww.t.eraseLocked()
-	return ww.w.Write(p)
+	p := ww.t.p
+	ww.t.mu.Unlock()
+	if p != nil && (ww.w == ww.t.out || isTerminal(ww.w)) {
+		// mpb prints the line above the bars on its next refresh. Once the
+		// display has shut down it refuses, and the line goes straight out.
+		if n, err := p.Write(b); err == nil {
+			return n, nil
+		}
+	}
+	return ww.w.Write(b)
+}
+
+// isTerminal reports whether w is a terminal.
+func isTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
 }
 
 // Item starts one transfer within the current operation and returns a handle
@@ -213,7 +241,10 @@ func (t *Tracker) Item(name string, size int64) *Item {
 	if !t.begun {
 		return nil
 	}
-	it := &Item{t: t, gen: t.gen, name: name, phase: t.op, size: size}
+	it := &Item{t: t, gen: t.gen, name: name, size: size}
+	op := t.op
+	it.label.Store(&op)
+	it.bar = t.itemBarLocked(it)
 	t.active = append(t.active, it)
 	return it
 }
@@ -223,10 +254,15 @@ type Item struct {
 	t   *Tracker
 	gen uint64
 
+	name string
+	size int64
+	// label is the phase shown on the item's bar. It is read by the display
+	// without t.mu, so it is atomic.
+	label atomic.Pointer[string]
+	// bar is the item's bar, or nil when there is no terminal display.
+	bar *mpb.Bar
+
 	// The fields below are guarded by t.mu.
-	name  string
-	phase string
-	size  int64
 	done  int64
 	ended bool
 }
@@ -247,6 +283,16 @@ func (i *Item) Add(n int64) {
 	}
 	i.done += n
 	i.t.doneBytes += n
+	i.setBarLocked()
+}
+
+// setBarLocked shows the item's progress, and the operation's, on their bars.
+// Called with t.mu held.
+func (i *Item) setBarLocked() {
+	if i.bar != nil {
+		i.bar.SetCurrent(i.done)
+	}
+	i.t.publishLocked()
 }
 
 // Phase labels what is being done to the item now — "get" then "put" for a
@@ -261,8 +307,9 @@ func (i *Item) Phase(label string) {
 	if i.stale() {
 		return
 	}
-	i.phase = label
+	i.label.Store(&label)
 	i.done = 0
+	i.setBarLocked()
 }
 
 // rewind un-counts the bytes read from this item so far. It is called when a
@@ -281,6 +328,7 @@ func (i *Item) rewind() {
 	}
 	i.t.doneBytes -= i.done
 	i.done = 0
+	i.setBarLocked()
 }
 
 // Done marks the item finished. Calling it more than once is harmless, so it
@@ -302,6 +350,10 @@ func (i *Item) Done() {
 			break
 		}
 	}
+	if i.bar != nil {
+		i.bar.Abort(true)
+	}
+	i.t.publishLocked()
 }
 
 // Reader returns r wrapped so every byte read from it counts towards this item
@@ -349,7 +401,8 @@ func (c *countingSeeker) Seek(offset int64, whence int) (int64, error) {
 	return pos, err
 }
 
-// loop repaints the display until the operation it was started for ends.
+// loop keeps the transfer rate current until the operation it was started for
+// ends, and on a non-terminal prints the periodic summary line.
 func (t *Tracker) loop(gen uint64) {
 	interval := paintInterval
 	if !t.tty {
@@ -364,7 +417,8 @@ func (t *Tracker) loop(gen uint64) {
 	}
 }
 
-// paint draws the current state, reporting false once this operation is over.
+// paint refreshes the current state, reporting false once this operation is
+// over.
 func (t *Tracker) paint(gen uint64) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -373,6 +427,7 @@ func (t *Tracker) paint(gen uint64) bool {
 	}
 	now := time.Now()
 	t.rate.observe(now, t.doneBytes)
+	t.publishLocked()
 	if !t.tty {
 		// No cursor to move: report one summary line now and then instead.
 		if now.Sub(t.lastPlain) >= t.plainEvery {
@@ -381,6 +436,6 @@ func (t *Tracker) paint(gen uint64) bool {
 		}
 		return true
 	}
-	t.drawLocked()
+	// mpb repaints the bars on its own schedule.
 	return true
 }
