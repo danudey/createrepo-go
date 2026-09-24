@@ -203,7 +203,7 @@ func KeyAndSubkeyIDs(keyID string) []string {
 	}
 	seen := map[string]bool{self: true}
 	ids := []string{self}
-	for _, line := range strings.Split(out.String(), "\n") {
+	for line := range strings.SplitSeq(out.String(), "\n") {
 		fields := strings.Split(line, ":")
 		if len(fields) > 9 && fields[0] == gpgRecordFpr {
 			if id := longKeyID(fields[9]); id != "" && !seen[id] {

@@ -255,10 +255,7 @@ func changelogs(pkg *rpm.Package, limit int) []repodata.Changelog {
 	times := pkg.Header.GetTag(tagChangelogTime).Int64Slice()
 	names := pkg.Header.GetTag(tagChangelogName).StringSlice()
 	texts := pkg.Header.GetTag(tagChangelogText).StringSlice()
-	n := min(len(names), len(times))
-	if len(texts) < n {
-		n = len(texts)
-	}
+	n := min(len(texts), min(len(names), len(times)))
 	if n == 0 {
 		return nil
 	}

@@ -44,7 +44,7 @@ func (i TagType) String() string {
 type Tag struct {
 	ID    int
 	Type  TagType
-	Value interface{}
+	Value any
 }
 
 // StringSlice returns a slice of strings or nil if the index is not a string

@@ -76,7 +76,7 @@ func (t RPMTool) verifyPayload(path string) (detail string, ok bool, err error) 
 // single-line summary.
 func condenseDigestLines(text string) string {
 	var parts []string
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue

@@ -69,7 +69,7 @@ func (c *Package) dependencies(nevrsTagID, flagsTagID, namesTagID, versionsTagID
 	names := c.Header.GetTag(namesTagID).StringSlice()
 	vers := c.Header.GetTag(versionsTagID).StringSlice()
 	deps := make([]Dependency, len(names))
-	for i := 0; i < len(names); i++ {
+	for i := range names {
 		epoch, ver, rel := parseVersion(vers[i])
 		deps[i] = &dependency{
 			flags:   int(flgs[i]),
@@ -169,7 +169,7 @@ func (c *Package) Files() []FileInfo {
 	digests := c.Header.GetTag(1035).StringSlice()
 	linknames := c.Header.GetTag(1036).StringSlice()
 	a := make([]FileInfo, len(names))
-	for i := 0; i < len(names); i++ {
+	for i := range names {
 		a[i] = FileInfo{
 			name:     dirs[ixs[i]] + names[i],
 			mode:     fileModeFromInt64(modes[i]),

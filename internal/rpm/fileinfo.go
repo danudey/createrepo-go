@@ -93,6 +93,6 @@ func (f *FileInfo) Linkname() string {
 }
 
 // Sys implements os.FileInfo and always returns nil.
-func (f *FileInfo) Sys() interface{} {
+func (f *FileInfo) Sys() any {
 	return nil
 }

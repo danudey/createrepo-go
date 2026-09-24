@@ -3,6 +3,7 @@ package repodata
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -202,12 +203,7 @@ func (f Filter) archAllows(p *Package) bool {
 	if p.Arch == "noarch" {
 		return true
 	}
-	for _, a := range f.Arches {
-		if p.Arch == a {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(f.Arches, p.Arch)
 }
 
 // LatestVersions keeps only the highest epoch:version-release of each
