@@ -43,8 +43,16 @@ Releases publish signed archives of each binary for every supported platform.
 | Path | What it holds |
 | --- | --- |
 | `cmd/createrepo-go`, `cmd/createapt-go` | the two CLIs |
-| `pkg/backend` | shared: storage abstraction (local/sftp/s3/gcs/http) with optional `RemoteHasher`, `Lister`, `Copier` and `FileStore` capabilities |
+| `pkg/backend` | shared: storage abstraction (local/sftp/s3/gcs/http) with optional `RemoteHasher`, `Lister`, `Copier` and `FileStore` capabilities; refuses paths that escape the root |
 | `pkg/progress` | shared: the `--progress` display |
+| `pkg/xfer` | shared: fetch, verify, upload and hash files; the verbatim `copy` engine |
+| `pkg/publish` | shared: the publish planner (upload, skip, relocate, collect) and the write order that keeps a repository whole |
+| `pkg/integrity` | shared: the per-file presence, size and checksum check behind `verify` |
+| `pkg/checkcore` | shared: levels, results and collection for `check` |
+| `pkg/gpg` | shared: OpenPGP signing, verification and key handling |
+| `pkg/compress` | shared: in-process decoding of gzip, zstd, xz and bzip2 metadata |
+| `pkg/configfile` | shared: load and save the per-repository JSON config |
+| `internal/cli`, `internal/parallel` | shared: command-line plumbing and a bounded worker pool |
 | `pkg/rpm/*` | rpm-md: `repodata` (data model and XML), `rpmmeta` (read an RPM), `repo` (load, mutate, publish), `repocheck`, `repoconfig`, `sign`, `takeover` |
 | `pkg/apt/*` | apt: `aptdata` (deb822 model, `Packages`/`Sources`/`Release`, version comparison, layout), `debmeta` (read a `.deb` or `.dsc`), `repo`, `repocheck`, `repoconfig`, `sign` |
 | `internal/rpm` | a vendored copy of `github.com/cavaliergopher/rpm` (see its `doc.go`) |
@@ -53,6 +61,12 @@ Releases publish signed archives of each binary for every supported platform.
 
 Each format's `repo` package is the library entry point: `Open`/`Add`/`Remove`/
 `Commit`, with `OpenWith` accepting a custom backend.
+
+The rule for what is shared: mechanism lives in the shared packages, and
+anything that knows a format — what files a repository is made of, how its
+metadata is generated, its dependency model, its signing policy — stays in
+`pkg/rpm` or `pkg/apt`. A fix to transfers, publishing order, verification or
+signing therefore lands in both tools at once.
 
 ## Testing
 
