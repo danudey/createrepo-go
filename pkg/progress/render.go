@@ -17,9 +17,8 @@ import (
 // bar is finished; the Tracker says when, which is what lets an item's bar be
 // restarted for its next phase.
 
-// barStyle keeps the bars in ASCII, which is correct in any terminal and any
-// locale, which a block-drawing character is not.
-var barStyle = mpb.BarStyle().Lbound("[").Filler("=").Tip("=").Padding("-").Rbound("]")
+// Use box drawing characters for the progress bar because it looks nicer.
+var barStyle = mpb.BarStyle().Lbound(" ").Filler("━").Tip("━").Padding(" ").Rbound(" ")
 
 // totalPriority keeps the operation's bar below every transfer's bar.
 const totalPriority = math.MaxInt
