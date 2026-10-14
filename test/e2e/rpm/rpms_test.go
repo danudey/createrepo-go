@@ -26,8 +26,8 @@ type rpmSet struct {
 }
 
 const (
-	refRPMDir = "../../reference/rpmbuild/RPMS"
-	specDir   = "../../reference/specs"
+	refRPMDir = "../../../reference/rpm/rpmbuild/RPMS"
+	specDir   = "../../../reference/rpm/specs"
 )
 
 // haveNewer reports whether the bumped hello build is available.

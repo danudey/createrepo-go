@@ -11,14 +11,14 @@ test: tidy
 # End-to-end tests: drive the built binary against local disk, a fresh MinIO
 # instance (S3), a local sshd (SFTP), a fake-gcs-server container (GCS), and a
 # read-only HTTP server. Backends whose dependencies are absent skip themselves.
-# See test/e2e/README.md.
+# See test/e2e/rpm/README.md.
 test-e2e: tidy
 	go tool gotestsum --format testname -- -tags e2e ./test/e2e/... -timeout 600s
 
 # Regenerate the RPM + createrepo_c reference fixtures (needs rpmbuild +
 # createrepo_c). The fixtures are committed, so commit the result.
 fixtures:
-	./reference/gen.sh
+	./reference/rpm/gen.sh
 
 tidy:
 	@go mod tidy

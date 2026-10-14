@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/danudey/createrepo-go/pkg/repodata"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
 )
 
 // TestMetadataMatchesCreaterepo generates primary/filelists/other for the

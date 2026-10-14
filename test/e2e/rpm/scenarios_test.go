@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danudey/createrepo-go/pkg/sign"
+	"github.com/danudey/createrepo-go/pkg/rpm/sign"
 )
 
 // scenario is one backend-agnostic behavior check, run against every writable

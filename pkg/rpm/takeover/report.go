@@ -3,7 +3,7 @@ package takeover
 import (
 	"sort"
 
-	"github.com/danudey/createrepo-go/pkg/repoconfig"
+	"github.com/danudey/createrepo-go/pkg/rpm/repoconfig"
 )
 
 // Severity ranks a finding by what it costs the repository's clients.

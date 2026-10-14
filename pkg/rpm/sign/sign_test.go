@@ -8,7 +8,7 @@ import (
 )
 
 // referenceRPM is an unsigned RPM produced by the repo test setup.
-const referenceRPM = "../../reference/rpmbuild/RPMS/noarch/hello-2.10-3.noarch.rpm"
+const referenceRPM = "../../../reference/rpm/rpmbuild/RPMS/noarch/hello-2.10-3.noarch.rpm"
 
 // setupKey creates an ephemeral GnuPG home with a fresh signing key and exports
 // public/secret key files. It skips the test if the required tools are absent.

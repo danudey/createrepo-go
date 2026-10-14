@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/danudey/createrepo-go/pkg/repodata"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
 )
 
 // diffPackages compares the metadata that would be written for each package

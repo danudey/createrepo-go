@@ -10,8 +10,8 @@ import (
 
 	"github.com/danudey/createrepo-go/pkg/backend"
 	"github.com/danudey/createrepo-go/pkg/progress"
-	"github.com/danudey/createrepo-go/pkg/repo"
-	"github.com/danudey/createrepo-go/pkg/repodata"
+	"github.com/danudey/createrepo-go/pkg/rpm/repo"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
 )
 
 func rebuildCmd() *cobra.Command {

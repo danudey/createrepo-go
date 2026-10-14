@@ -5,7 +5,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/danudey/createrepo-go/pkg/repodata"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
 )
 
 func timeNow() int64 { return time.Now().Unix() }

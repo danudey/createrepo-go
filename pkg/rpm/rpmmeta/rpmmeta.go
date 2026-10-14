@@ -17,7 +17,7 @@ import (
 	"strings"
 
 	"github.com/danudey/createrepo-go/internal/rpm"
-	"github.com/danudey/createrepo-go/pkg/repodata"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
 )
 
 // rpm header tag identifiers we read directly.

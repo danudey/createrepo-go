@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/danudey/createrepo-go/pkg/repodata"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
 )
 
 // referenceRepo is the createrepo_c-generated repo built by the repo setup.
-const referenceRepo = "../../reference/repo"
+const referenceRepo = "../../../reference/rpm/repo"
 
 func TestFromFileHello(t *testing.T) {
 	p, err := FromFile(filepath.Join(referenceRepo, "hello-2.10-3.noarch.rpm"), DefaultOptions())

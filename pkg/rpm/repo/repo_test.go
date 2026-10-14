@@ -12,7 +12,7 @@ import (
 	"github.com/danudey/createrepo-go/pkg/backend"
 )
 
-const refRPMDir = "../../reference/rpmbuild/RPMS"
+const refRPMDir = "../../../reference/rpm/rpmbuild/RPMS"
 
 func helloRPM() string  { return filepath.Join(refRPMDir, "noarch/hello-2.10-3.noarch.rpm") }
 func libfooRPM() string { return filepath.Join(refRPMDir, "x86_64/libfoo-1.3.0-1.x86_64.rpm") }

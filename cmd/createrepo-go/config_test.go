@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/danudey/createrepo-go/pkg/repoconfig"
+	"github.com/danudey/createrepo-go/pkg/rpm/repoconfig"
 )
 
 func TestApplyConfigDefaults(t *testing.T) {

@@ -91,7 +91,7 @@ linters:
       # noctx's HTTP and net.Dial checks are worth having; its exec.Command
       # check is not. Every subprocess here is a short-lived local gpg,
       # rpmsign or rpmkeys run, and making them cancellable would mean a
-      # context parameter on most of pkg/sign's exported API for no gain.
+      # context parameter on most of pkg/rpm/sign's exported API for no gain.
       - linters: [noctx]
         text: "os/exec.Command must not be called"
       # Test files legitimately do things production code should not.

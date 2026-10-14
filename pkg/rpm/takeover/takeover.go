@@ -21,10 +21,10 @@ import (
 	"strings"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
-	"github.com/danudey/createrepo-go/pkg/repo"
-	"github.com/danudey/createrepo-go/pkg/repoconfig"
-	"github.com/danudey/createrepo-go/pkg/repodata"
-	"github.com/danudey/createrepo-go/pkg/sign"
+	"github.com/danudey/createrepo-go/pkg/rpm/repo"
+	"github.com/danudey/createrepo-go/pkg/rpm/repoconfig"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
+	"github.com/danudey/createrepo-go/pkg/rpm/sign"
 )
 
 // maxItems is how many subjects a finding lists before it summarizes the rest.

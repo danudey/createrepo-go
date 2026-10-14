@@ -29,7 +29,7 @@ func TestMain(m *testing.M) {
 	// Build the CLI binary from the module root.
 	binPath = filepath.Join(tmp, "createrepo-go")
 	build := exec.Command("go", "build", "-o", binPath, "./cmd/createrepo-go")
-	build.Dir = "../.."
+	build.Dir = "../../.."
 	if out, err := build.CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "e2e: build CLI: %v\n%s\n", err, out)
 		os.Exit(1)

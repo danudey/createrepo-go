@@ -14,8 +14,8 @@ import (
 
 	"github.com/danudey/createrepo-go/pkg/backend"
 	"github.com/danudey/createrepo-go/pkg/progress"
-	"github.com/danudey/createrepo-go/pkg/repodata"
-	"github.com/danudey/createrepo-go/pkg/rpmmeta"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
+	"github.com/danudey/createrepo-go/pkg/rpm/rpmmeta"
 )
 
 // ConfigPath is the repo-root-relative name of the createrepo-go config file.

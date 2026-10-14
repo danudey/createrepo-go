@@ -14,7 +14,7 @@ What changed from upstream:
 
   - signature.go is gone, with it GPGCheck, MD5Check, ReadKeyRing,
     OpenKeyRing and the GPGSignature type. Nothing here used them. Signature
-    verification in this project lives in pkg/sign, which shells out to
+    verification in this project lives in pkg/rpm/sign, which shells out to
     rpmkeys and gpg and, where it parses OpenPGP itself, uses the maintained
     github.com/ProtonMail/go-crypto.
   - Package.GPGSignature returns the raw tag bytes instead of the removed
@@ -27,7 +27,7 @@ Everything else is upstream, unmodified, so that a future upstream release
 can be diffed against it. .golangci.yml excludes this directory for the same
 reason; the linters have plenty to say about it and none of it is actionable
 without losing that property. The header parsing is exercised by the golden
-tests in pkg/rpmmeta, which assert byte offsets, dependencies, file lists and
+tests in pkg/rpm/rpmmeta, which assert byte offsets, dependencies, file lists and
 changelogs against createrepo_c's own output for the reference fixtures.
 
 For more information about the rpm file format, see:

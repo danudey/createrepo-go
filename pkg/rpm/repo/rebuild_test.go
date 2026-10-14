@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
-	"github.com/danudey/createrepo-go/pkg/repodata"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
 )
 
 // pkg builds a minimal synthetic package for index-level reconciliation tests.

@@ -10,8 +10,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
-	"github.com/danudey/createrepo-go/pkg/repoconfig"
-	"github.com/danudey/createrepo-go/pkg/takeover"
+	"github.com/danudey/createrepo-go/pkg/rpm/repoconfig"
+	"github.com/danudey/createrepo-go/pkg/rpm/takeover"
 )
 
 // errTakeoverBlocked signals that the analysis found something that would break

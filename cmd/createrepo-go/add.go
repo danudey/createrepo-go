@@ -10,7 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/danudey/createrepo-go/pkg/sign"
+	"github.com/danudey/createrepo-go/pkg/rpm/sign"
 )
 
 func addCmd() *cobra.Command {

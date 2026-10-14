@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
-	"github.com/danudey/createrepo-go/pkg/repodata"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
 )
 
 // publishedSource builds a two-package repository on disk and returns its

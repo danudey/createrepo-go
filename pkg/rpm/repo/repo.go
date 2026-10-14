@@ -17,8 +17,8 @@ import (
 
 	"github.com/danudey/createrepo-go/pkg/backend"
 	"github.com/danudey/createrepo-go/pkg/progress"
-	"github.com/danudey/createrepo-go/pkg/repodata"
-	"github.com/danudey/createrepo-go/pkg/rpmmeta"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
+	"github.com/danudey/createrepo-go/pkg/rpm/rpmmeta"
 )
 
 // Signer signs the repomd.xml document, producing an ASCII-armored detached

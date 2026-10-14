@@ -3,7 +3,7 @@ package repo
 import (
 	"testing"
 
-	"github.com/danudey/createrepo-go/pkg/repodata"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
 )
 
 func mkPkg(name, arch, ver, rel string) *repodata.Package {

@@ -11,7 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/danudey/createrepo-go/pkg/repocheck"
+	"github.com/danudey/createrepo-go/pkg/rpm/repocheck"
 )
 
 // errCheckFailed signals that validation ran but reported failures. The report

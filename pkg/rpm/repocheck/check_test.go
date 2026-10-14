@@ -18,7 +18,7 @@ import (
 	"testing"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
-	"github.com/danudey/createrepo-go/pkg/repodata"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
 )
 
 func TestParseLevel(t *testing.T) {

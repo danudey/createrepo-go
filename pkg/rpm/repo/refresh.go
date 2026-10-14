@@ -8,8 +8,8 @@ import (
 	"sort"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
-	"github.com/danudey/createrepo-go/pkg/repodata"
-	"github.com/danudey/createrepo-go/pkg/rpmmeta"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
+	"github.com/danudey/createrepo-go/pkg/rpm/rpmmeta"
 )
 
 // RefreshOptions configures RefreshFromPackages.

@@ -744,20 +744,20 @@ any error.
 
 The CLI is a thin wrapper over reusable packages:
 
-- `pkg/repodata` — rpm-md data model and primary/filelists/other/repomd XML.
-- `pkg/rpmmeta` — extract repository metadata from an RPM file.
+- `pkg/rpm/repodata` — rpm-md data model and primary/filelists/other/repomd XML.
+- `pkg/rpm/rpmmeta` — extract repository metadata from an RPM file.
 - `pkg/backend` — storage abstraction (local/sftp/s3/gcs/http) with an optional
   `RemoteHasher` capability for download-free validation.
-- `pkg/repo` — load, mutate and publish a repository (`Open`/`AddRPM`/`Remove`/
+- `pkg/rpm/repo` — load, mutate and publish a repository (`Open`/`AddRPM`/`Remove`/
   `Commit`); `OpenWith` accepts a custom backend.
-- `pkg/takeover` — analyse a repository this tool did not create and report what
+- `pkg/rpm/takeover` — analyse a repository this tool did not create and report what
   publishing it with a given set of settings would change (`takeover.Analyze`).
-- `pkg/repocheck` — layered validation (`metadata`/`head`/`fetch`) of a
+- `pkg/rpm/repocheck` — layered validation (`metadata`/`head`/`fetch`) of a
   repository over any backend, including `.repo`-file and `$releasever` handling
   (`repocheck.Run`).
-- `pkg/sign` — repomd signing, RPM verification, RPM package signing, and signing
+- `pkg/rpm/sign` — repomd signing, RPM verification, RPM package signing, and signing
   key fingerprint resolution.
-- `pkg/repoconfig` — load/save the `createrepo-go.json` repository config file.
+- `pkg/rpm/repoconfig` — load/save the `createrepo-go.json` repository config file.
 
 ## Testing
 

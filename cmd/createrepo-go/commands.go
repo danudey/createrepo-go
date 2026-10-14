@@ -6,8 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/danudey/createrepo-go/pkg/repo"
-	"github.com/danudey/createrepo-go/pkg/repodata"
+	"github.com/danudey/createrepo-go/pkg/rpm/repo"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
 )
 
 func createCmd() *cobra.Command {
