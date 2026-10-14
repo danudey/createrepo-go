@@ -3,11 +3,11 @@ package main
 import (
 	"errors"
 	"fmt"
-	"io"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
+
+	"github.com/danudey/createrepo-go/internal/cli"
 
 	"github.com/spf13/cobra"
 
@@ -99,8 +99,8 @@ Examples:
 				return fmt.Errorf("invalid --versions %q (want latest|all)", cf.versions)
 			}
 
-			out := stdout(cmd)
-			errOut := stderr(cmd)
+			out := cmd.OutOrStdout()
+			errOut := cmd.ErrOrStderr()
 
 			var logf func(format string, args ...any)
 			if cf.verbose {
@@ -114,11 +114,11 @@ Examples:
 
 			fmt.Fprintf(out, "check: level=%s versions=%s\n", level, versionsLabel(latestOnly))
 
-			results, warnings, err := repocheck.Run(ctx(cmd), repocheck.Options{
+			results, warnings, err := repocheck.Run(cli.Ctx(cmd), repocheck.Options{
 				Input:       input,
-				Releasevers: splitList(cf.releasever),
+				Releasevers: cli.SplitList(cf.releasever),
 				Arches:      resolveArches(cf.arch),
-				Packages:    splitList(cf.packages),
+				Packages:    cli.SplitList(cf.packages),
 				Level:       level,
 				LatestOnly:  latestOnly,
 				Concurrency: cf.concurrency,
@@ -137,7 +137,7 @@ Examples:
 				return err
 			}
 
-			if failed := reportCheck(out, results); failed {
+			if failed := cli.ReportCheck(out, results); failed {
 				return errCheckFailed
 			}
 			return nil
@@ -153,49 +153,6 @@ Examples:
 	cmd.Flags().DurationVar(&cf.timeout, "timeout", 60*time.Second, "per-operation timeout (0 to disable)")
 	cmd.Flags().BoolVarP(&cf.verbose, "verbose", "v", false, "print a line for every check, not just failures and warnings")
 	return cmd
-}
-
-// reportCheck prints failures/warnings and a summary. It returns true if at
-// least one check failed.
-func reportCheck(out io.Writer, results []repocheck.Result) bool {
-	oks, fails, warns, skips := repocheck.Summarize(results)
-
-	// Sort failures/warnings to the top of a detail listing.
-	sorted := make([]repocheck.Result, len(results))
-	copy(sorted, results)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		return statusRank(sorted[i].Status) < statusRank(sorted[j].Status)
-	})
-
-	if fails > 0 || warns > 0 {
-		fmt.Fprintf(out, "\nIssues:\n")
-		for _, r := range sorted {
-			if r.Status == repocheck.StatusFail || r.Status == repocheck.StatusWarn {
-				fmt.Fprintf(out, "  [%s] %s :: %s\n        %s\n        %s\n", r.Status, r.Target, r.Kind, r.Detail, r.Loc)
-			}
-		}
-	}
-
-	fmt.Fprintf(out, "\nSummary: %d ok, %d failed, %d warnings, %d skipped\n", oks, fails, warns, skips)
-	if fails > 0 {
-		fmt.Fprintln(out, "RESULT: FAIL")
-		return true
-	}
-	fmt.Fprintln(out, "RESULT: OK")
-	return false
-}
-
-func statusRank(s repocheck.Status) int {
-	switch s {
-	case repocheck.StatusFail:
-		return 0
-	case repocheck.StatusWarn:
-		return 1
-	case repocheck.StatusSkip:
-		return 2
-	default:
-		return 3
-	}
 }
 
 // versionsAll is the --versions value meaning "every version"; archAll is the
@@ -222,7 +179,7 @@ func resolveArches(flagVal string) []string {
 	case "", archAll:
 		return []string{hostArch()}
 	default:
-		return splitList(flagVal)
+		return cli.SplitList(flagVal)
 	}
 }
 
@@ -240,14 +197,4 @@ func hostArch() string {
 	default:
 		return runtime.GOARCH
 	}
-}
-
-func splitList(s string) []string {
-	var out []string
-	for part := range strings.SplitSeq(s, ",") {
-		if part = strings.TrimSpace(part); part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
 }

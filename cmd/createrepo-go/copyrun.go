@@ -7,6 +7,10 @@ import (
 	"os"
 	"strings"
 
+	"github.com/danudey/createrepo-go/internal/cli"
+	"github.com/danudey/createrepo-go/pkg/progress"
+	"github.com/danudey/createrepo-go/pkg/xfer"
+
 	"github.com/spf13/cobra"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
@@ -22,10 +26,10 @@ import (
 func copyExact(cmd *cobra.Command, src *repo.Repo, srcLoc string, srcCfg *repoconfig.Config, srcSig []byte,
 	dstBE backend.Backend, dstLoc string, dstExists bool, cf *copyFlags, verifier *sign.Verifier,
 ) error {
-	out, errOut := stdout(cmd), stderr(cmd)
+	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 	defer closeBackend(dstBE)
 
-	objs, listed, err := src.Objects(ctx(cmd))
+	objs, listed, err := src.Objects(cli.Ctx(cmd))
 	if err != nil {
 		return err
 	}
@@ -35,11 +39,11 @@ func copyExact(cmd *cobra.Command, src *repo.Repo, srcLoc string, srcCfg *repoco
 
 	prune := cf.overwrite && dstExists
 	fmt.Fprintf(out, "Copy %s -> %s (exact, %d object(s), %s)\n",
-		srcLoc, dstLoc, len(objs), humanBytes(totalObjectSize(objs)))
+		srcLoc, dstLoc, len(objs), progress.Bytes(xfer.TotalSize(objs)))
 	if prune {
 		fmt.Fprintf(out, "  --overwrite: files at the destination that the source does not have will be deleted\n")
 		if !cf.assumeYes && !gf.dryRun {
-			if !promptYesNo(cmd, "Proceed?") {
+			if !cli.PromptYesNo(cmd, "Proceed?") {
 				fmt.Fprintln(out, "aborted; no changes made")
 				return nil
 			}
@@ -50,7 +54,7 @@ func copyExact(cmd *cobra.Command, src *repo.Repo, srcLoc string, srcCfg *repoco
 	if gf.dryRun {
 		prefix = dryRunPrefix
 	}
-	stats, err := repo.CopyExact(ctx(cmd), src.Backend(), dstBE, objs, repo.CopyOptions{
+	stats, err := repo.CopyExact(cli.Ctx(cmd), src.Backend(), dstBE, objs, repo.CopyOptions{
 		DryRun:  gf.dryRun,
 		Force:   gf.force,
 		Prune:   prune,
@@ -83,7 +87,7 @@ func copyExact(cmd *cobra.Command, src *repo.Repo, srcLoc string, srcCfg *repoco
 	writeRepoConfig(cmd, dstBE, &cfg)
 
 	fmt.Fprintf(out, "%s%d object(s) copied (%s), %d already present%s\n",
-		prefix, stats.Copied, humanBytes(stats.Bytes), stats.Skipped, deletedSuffix(stats))
+		prefix, stats.Copied, progress.Bytes(stats.Bytes), stats.Skipped, cli.DeletedSuffix(len(stats.Deleted)))
 	return nil
 }
 
@@ -103,12 +107,12 @@ func resignCopiedMetadata(cmd *cobra.Command, src *repo.Repo, dstBE backend.Back
 	if err != nil {
 		return fmt.Errorf("sign repomd.xml: %w", err)
 	}
-	out := stdout(cmd)
+	out := cmd.OutOrStdout()
 	if gf.dryRun {
 		fmt.Fprintln(out, "[dry-run] sign    repodata/repomd.xml.asc")
 		return nil
 	}
-	if err := dstBE.Put(ctx(cmd), "repodata/repomd.xml.asc", bytes.NewReader(sig), int64(len(sig))); err != nil {
+	if err := dstBE.Put(cli.Ctx(cmd), "repodata/repomd.xml.asc", bytes.NewReader(sig), int64(len(sig))); err != nil {
 		return fmt.Errorf("write repomd.xml.asc: %w", err)
 	}
 	verb := "signed"
@@ -175,7 +179,7 @@ func copyRebuilding(cmd *cobra.Command, run copyRun) error {
 		if run.dstExists && !cf.assumeYes && !gf.dryRun {
 			fmt.Fprintf(run.out, "--overwrite: the %d package(s) already at %s are dropped, and any RPM the new metadata does not reference is deleted\n",
 				existing, run.dstLoc)
-			if !promptYesNo(cmd, "Proceed?") {
+			if !cli.PromptYesNo(cmd, "Proceed?") {
 				fmt.Fprintln(run.out, "aborted; no changes made")
 				return nil
 			}
@@ -194,7 +198,7 @@ func copyRebuilding(cmd *cobra.Command, run copyRun) error {
 	}
 	fmt.Fprintf(run.out, "Copy %s -> %s (rebuilding metadata, %d package(s))\n", run.srcLoc, run.dstLoc, len(run.selected))
 
-	stats, err := dst.CopyPackagesFrom(ctx(cmd), run.src.Backend(), run.selected, repo.PackageCopyOptions{
+	stats, err := dst.CopyPackagesFrom(cli.Ctx(cmd), run.src.Backend(), run.selected, repo.PackageCopyOptions{
 		LocationPrefix:  gf.locationPrefix,
 		Relocate:        run.relocate,
 		SetXMLBase:      run.changeBaseURL,
@@ -229,7 +233,7 @@ func copyRebuilding(cmd *cobra.Command, run copyRun) error {
 		}
 	}
 
-	plan, err := dst.Commit(ctx(cmd))
+	plan, err := dst.Commit(cli.Ctx(cmd))
 	if err != nil {
 		return err
 	}
@@ -251,7 +255,7 @@ func copyRebuilding(cmd *cobra.Command, run copyRun) error {
 	writeRepoConfig(cmd, dst.Backend(), &cfg)
 
 	fmt.Fprintf(run.out, "%s%d package(s) transferred (%s), %d already present\n",
-		prefix, stats.Copied, humanBytes(stats.Bytes), stats.Skipped)
+		prefix, stats.Copied, progress.Bytes(stats.Bytes), stats.Skipped)
 	return nil
 }
 
@@ -292,7 +296,7 @@ func checkPackageSigners(cmd *cobra.Command, run copyRun, dst *repo.Repo, dstCfg
 	case !srcSig.signed && !dstSig.signed:
 		return nil // neither side is signed: nothing can conflict
 	case srcSig.unknown() || dstSig.unknown():
-		fmt.Fprintln(stderr(cmd), "warning: --update: could not determine which key signed one or both repositories' packages; not checking that they match")
+		fmt.Fprintln(cmd.ErrOrStderr(), "warning: --update: could not determine which key signed one or both repositories' packages; not checking that they match")
 		return nil
 	case sign.SameSigner(srcSig.ids, dstSig.ids):
 		return nil
@@ -335,7 +339,7 @@ func signerIDs(cmd *cobra.Command, cfgKey string, r *repo.Repo, pkgs []*repodata
 	if len(pkgs) == 0 {
 		return signers{}, nil
 	}
-	tmp, err := r.GetToFile(ctx(cmd), pkgs[0].Location)
+	tmp, err := r.GetToFile(cli.Ctx(cmd), pkgs[0].Location)
 	if err != nil {
 		return signers{}, fmt.Errorf("sampling %s: %w", pkgs[0].Location, err)
 	}
@@ -401,21 +405,4 @@ func transformReasons(cmd *cobra.Command, run copyRun) []string {
 		why = append(why, "the requested changes")
 	}
 	return why
-}
-
-func totalObjectSize(objs []repo.SourceObject) int64 {
-	var total int64
-	for _, o := range objs {
-		if o.Size > 0 {
-			total += o.Size
-		}
-	}
-	return total
-}
-
-func deletedSuffix(stats *repo.CopyStats) string {
-	if len(stats.Deleted) == 0 {
-		return ""
-	}
-	return fmt.Sprintf(", %d extraneous file(s) deleted", len(stats.Deleted))
 }

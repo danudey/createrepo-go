@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/danudey/createrepo-go/internal/cli"
+
 	"github.com/spf13/cobra"
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
@@ -124,11 +126,11 @@ func runCopy(cmd *cobra.Command, srcLoc, dstLoc string, cf *copyFlags) error {
 	}
 
 	// --- source ---------------------------------------------------------
-	srcBE, err := backend.Open(ctx(cmd), srcLoc)
+	srcBE, err := backend.Open(cli.Ctx(cmd), srcLoc)
 	if err != nil {
 		return err
 	}
-	srcCfg, err := repoconfig.Load(ctx(cmd), srcBE)
+	srcCfg, err := repoconfig.Load(cli.Ctx(cmd), srcBE)
 	if err != nil {
 		closeBackend(srcBE)
 		return err
@@ -137,7 +139,7 @@ func runCopy(cmd *cobra.Command, srcLoc, dstLoc string, cf *copyFlags) error {
 	if srcSuite == "" && srcCfg != nil {
 		srcSuite = srcCfg.Suite
 	}
-	src, err := repo.OpenWith(ctx(cmd), srcBE, repo.Options{Suite: srcSuite})
+	src, err := repo.OpenWith(cli.Ctx(cmd), srcBE, repo.Options{Suite: srcSuite})
 	if err != nil {
 		return fmt.Errorf("source: %w", err)
 	}
@@ -172,7 +174,7 @@ func runCopy(cmd *cobra.Command, srcLoc, dstLoc string, cf *copyFlags) error {
 	if dstSuite == "" {
 		dstSuite = src.Suite()
 	}
-	dstBE, err := backend.Open(ctx(cmd), dstLoc)
+	dstBE, err := backend.Open(cli.Ctx(cmd), dstLoc)
 	if err != nil {
 		return err
 	}
@@ -259,7 +261,7 @@ func (cf *copyFlags) filter() (aptdata.Filter, error) {
 // suiteExists reports whether a suite has already been published at be.
 func suiteExists(cmd *cobra.Command, be backend.Backend, suite string) (bool, error) {
 	for _, p := range []string{aptdata.ReleasePath(suite), aptdata.InReleasePath(suite)} {
-		_, err := be.Stat(ctx(cmd), p)
+		_, err := be.Stat(cli.Ctx(cmd), p)
 		switch {
 		case err == nil:
 			return true, nil
@@ -304,7 +306,7 @@ func verificationKeyrings(cmd *cobra.Command, srcCfg *repoconfig.Config) ([]stri
 func verifySourceRelease(cmd *cobra.Command, src *repo.Repo, keyrings []string) (bool, error) {
 	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 
-	inRelease, detached, err := src.ReleaseSignatures(ctx(cmd))
+	inRelease, detached, err := src.ReleaseSignatures(cli.Ctx(cmd))
 	if err != nil {
 		return false, fmt.Errorf("reading the source's Release signature: %w", err)
 	}
@@ -344,7 +346,7 @@ func verifySourceRelease(cmd *cobra.Command, src *repo.Repo, keyrings []string) 
 		}
 	}
 
-	raw, err := src.RawRelease(ctx(cmd))
+	raw, err := src.RawRelease(cli.Ctx(cmd))
 	if err != nil {
 		return true, fmt.Errorf("reading the source's Release: %w", err)
 	}
@@ -360,7 +362,7 @@ func verifySourceRelease(cmd *cobra.Command, src *repo.Repo, keyrings []string) 
 // source: the destination must record the same origin, or hold nothing the
 // source does not have.
 func checkResumable(cmd *cobra.Command, srcLoc string, dstBE backend.Backend, dstSuite string, dstExists bool, src *repo.Repo) error {
-	dstCfg, err := repoconfig.Load(ctx(cmd), dstBE)
+	dstCfg, err := repoconfig.Load(cli.Ctx(cmd), dstBE)
 	if err != nil {
 		return err
 	}
@@ -370,7 +372,7 @@ func checkResumable(cmd *cobra.Command, srcLoc string, dstBE backend.Backend, ds
 	if !dstExists {
 		return nil
 	}
-	dst, err := repo.OpenWith(ctx(cmd), dstBE, repo.Options{Suite: dstSuite})
+	dst, err := repo.OpenWith(cli.Ctx(cmd), dstBE, repo.Options{Suite: dstSuite})
 	if err != nil {
 		return fmt.Errorf("--continue: reading the destination: %w", err)
 	}

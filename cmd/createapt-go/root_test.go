@@ -340,17 +340,6 @@ func testCommand() *cobra.Command {
 	return cmd
 }
 
-func TestHumanBytes(t *testing.T) {
-	for in, want := range map[int64]string{
-		0: "0 B", 512: "512 B", 1024: "1.0 KiB",
-		1536: "1.5 KiB", 1048576: "1.0 MiB", 1073741824: "1.0 GiB",
-	} {
-		if got := humanBytes(in); got != want {
-			t.Errorf("humanBytes(%d) = %q; want %q", in, got, want)
-		}
-	}
-}
-
 func TestHostArchUsesDebianNames(t *testing.T) {
 	// Whatever this machine is, the name must be one Debian uses — never a Go
 	// GOARCH spelling that no repository would have an index for.
@@ -362,30 +351,5 @@ func TestHostArchUsesDebianNames(t *testing.T) {
 	}
 	if got == "" {
 		t.Error("hostArch() returned an empty architecture")
-	}
-}
-
-func TestEnvBool(t *testing.T) {
-	const name = "CREATEAPT_TEST_BOOL"
-	for _, v := range []string{"1", "true", "TRUE", "yes", " on "} {
-		t.Setenv(name, v)
-		if !envBool(name) {
-			t.Errorf("envBool(%q) = false; want true", v)
-		}
-	}
-	for _, v := range []string{"", "0", "false", "no", "maybe"} {
-		t.Setenv(name, v)
-		if envBool(name) {
-			t.Errorf("envBool(%q) = true; want false", v)
-		}
-	}
-}
-
-func TestSplitList(t *testing.T) {
-	if got := splitList(" a , b ,, c "); strings.Join(got, "|") != "a|b|c" {
-		t.Errorf("splitList trimmed or split wrongly: %v", got)
-	}
-	if got := splitList(""); len(got) != 0 {
-		t.Errorf("splitList(\"\") = %v; want nothing", got)
 	}
 }

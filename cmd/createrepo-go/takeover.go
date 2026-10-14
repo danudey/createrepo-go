@@ -7,6 +7,9 @@ import (
 	"io"
 	"strings"
 
+	"github.com/danudey/createrepo-go/internal/cli"
+	"github.com/danudey/createrepo-go/pkg/progress"
+
 	"github.com/spf13/cobra"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
@@ -106,7 +109,7 @@ Examples:
 				opts.Progress = func(line string) { fmt.Fprintln(cmd.OutOrStdout(), line) }
 			}
 
-			rep, err := takeover.Analyze(ctx(cmd), r, opts)
+			rep, err := takeover.Analyze(cli.Ctx(cmd), r, opts)
 			if err != nil {
 				return err
 			}
@@ -174,7 +177,7 @@ func adoptRepository(cmd *cobra.Command, be backend.Backend, rep *takeover.Repor
 			"but do not rebuild until they are resolved.\n", rep.Count(takeover.Blocking))
 	}
 	if !tf.assumeYes && !gf.dryRun {
-		if !promptYesNo(cmd, fmt.Sprintf("Record these settings in %s?", repoconfig.Path)) {
+		if !cli.PromptYesNo(cmd, fmt.Sprintf("Record these settings in %s?", repoconfig.Path)) {
 			fmt.Fprintln(out, "aborted; nothing written")
 			return nil
 		}
@@ -204,12 +207,12 @@ func field(out io.Writer, label, format string, args ...any) {
 func printPublished(out io.Writer, rep *takeover.Report) {
 	p := rep.Published
 	fmt.Fprintln(out, "\nAs published")
-	field(out, "packages", "%d (%s)", p.Packages, humanBytes(p.PackageBytes))
+	field(out, "packages", "%d (%s)", p.Packages, progress.Bytes(p.PackageBytes))
 	scope := ""
 	if !p.Listed {
 		scope = " (metadata only; this backend cannot list its contents)"
 	}
-	field(out, "repository", "%s across %d object(s)%s", humanBytes(p.TotalBytes), p.TotalFiles, scope)
+	field(out, "repository", "%s across %d object(s)%s", progress.Bytes(p.TotalBytes), p.TotalFiles, scope)
 
 	var types []string
 	for _, m := range p.Metadata {
@@ -318,10 +321,10 @@ func printChanges(out io.Writer, rep *takeover.Report) {
 		field(out, "move", "%d package(s), server-side (no re-upload)", c.ServerSideMoves)
 	}
 	if c.Uploads > 0 {
-		field(out, "upload", "%d file(s) (%s)", c.Uploads, humanBytes(c.UploadBytes))
+		field(out, "upload", "%d file(s) (%s)", c.Uploads, progress.Bytes(c.UploadBytes))
 	}
 	if len(c.DeletedFiles) > 0 {
-		field(out, "delete", "%d file(s) (%s)", len(c.DeletedFiles), humanBytes(c.DeletedBytes))
+		field(out, "delete", "%d file(s) (%s)", len(c.DeletedFiles), progress.Bytes(c.DeletedBytes))
 		const shown = 10
 		for i, f := range c.DeletedFiles {
 			if i == shown {

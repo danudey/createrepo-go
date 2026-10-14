@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 
+	"github.com/danudey/createrepo-go/internal/cli"
+
 	"github.com/spf13/cobra"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
@@ -17,7 +19,7 @@ import (
 // with the previously-persisted config (nil if none) so a later Save can
 // preserve fields (name/baseurl) it does not manage.
 func openRepo(cmd *cobra.Command, location string, create bool) (*repo.Repo, *repoconfig.Config, error) {
-	be, err := backend.Open(ctx(cmd), location)
+	be, err := backend.Open(cli.Ctx(cmd), location)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -28,7 +30,7 @@ func openRepo(cmd *cobra.Command, location string, create bool) (*repo.Repo, *re
 // whose config it may already have inspected). It takes ownership of be: on
 // success the returned Repo closes it, and on failure it is closed here.
 func openRepoBackend(cmd *cobra.Command, be backend.Backend, create bool) (*repo.Repo, *repoconfig.Config, error) {
-	prev, err := repoconfig.Load(ctx(cmd), be)
+	prev, err := repoconfig.Load(cli.Ctx(cmd), be)
 	if err != nil {
 		closeBackend(be)
 		return nil, nil, err
@@ -47,7 +49,7 @@ func openRepoBackend(cmd *cobra.Command, be backend.Backend, create bool) (*repo
 		closeBackend(be)
 		return nil, nil, err
 	}
-	r, err := repo.OpenWith(ctx(cmd), be, opts)
+	r, err := repo.OpenWith(cli.Ctx(cmd), be, opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -134,7 +136,7 @@ func effectiveConfig(cmd *cobra.Command, prev *repoconfig.Config, name, baseURL 
 	if gf.signPackages || gf.signMetadata {
 		cfg.SignatureFormat = gf.signatureFormat
 		if fpr, err := sign.Fingerprint(gf.gpgKey, gf.gpgKeyID); err != nil {
-			fmt.Fprintf(stderr(cmd), "warning: could not resolve signing key fingerprint: %v\n", err)
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not resolve signing key fingerprint: %v\n", err)
 		} else if fpr != "" {
 			cfg.GPGKeyID = fpr
 		}
@@ -146,16 +148,7 @@ func effectiveConfig(cmd *cobra.Command, prev *repoconfig.Config, name, baseURL 
 // mode, and a failure is reported without failing the command: by this point the
 // packages and metadata have already been published.
 func writeRepoConfig(cmd *cobra.Command, be backend.Backend, cfg *repoconfig.Config) {
-	out := stdout(cmd)
-	if gf.dryRun {
-		fmt.Fprintf(out, "[dry-run] config: would write %s\n", repoconfig.Path)
-		return
-	}
-	if err := repoconfig.Save(ctx(cmd), be, cfg); err != nil {
-		fmt.Fprintf(stderr(cmd), "warning: could not write %s: %v\n", repoconfig.Path, err)
-		return
-	}
-	fmt.Fprintf(out, "config: wrote %s\n", repoconfig.Path)
+	cli.WriteConfig(cmd, gf.dryRun, repoconfig.Path, func() error { return repoconfig.Save(cli.Ctx(cmd), be, cfg) })
 }
 
 // closeBackend closes a backend that holds resources, ignoring errors. It is

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/danudey/createrepo-go/internal/cli"
+
 	"github.com/spf13/cobra"
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
@@ -27,7 +29,7 @@ in effect. Later add/remove operations reuse those defaults unless overridden.`,
 				return err
 			}
 			defer r.Close()
-			plan, err := r.Commit(ctx(cmd))
+			plan, err := r.Commit(cli.Ctx(cmd))
 			if err != nil {
 				return err
 			}
@@ -74,7 +76,7 @@ publish.`,
 			}
 			printDependencyWarnings(cmd, r)
 
-			plan, err := r.Commit(ctx(cmd))
+			plan, err := r.Commit(cli.Ctx(cmd))
 			if err != nil {
 				return err
 			}
@@ -161,11 +163,11 @@ it had been verified.`,
 				// A full content check can be a large transfer; say so before
 				// starting rather than appearing to hang.
 				if n, size := r.DownloadEstimate(); n > 0 {
-					fmt.Fprintf(out, "hashing %d file(s) from %s: ~%s to download\n", n, r.Backend(), humanBytes(size))
+					fmt.Fprintf(out, "hashing %d file(s) from %s: ~%s to download\n", n, r.Backend(), progress.Bytes(size))
 				}
 			}
 
-			res, err := r.Verify(ctx(cmd), repo.VerifyOptions{
+			res, err := r.Verify(cli.Ctx(cmd), repo.VerifyOptions{
 				Checksums: mode, Concurrency: concurrency, Tracker: prog,
 			})
 			if err != nil {
@@ -276,7 +278,7 @@ func printPlan(cmd *cobra.Command, plan *repo.Plan, dryRun bool) {
 		sources = fmt.Sprintf(", %d source package(s)", plan.Sources)
 	}
 	fmt.Fprintf(out, "%s%d package(s)%s; %d upload(s) (%s), %d skipped%s%s; %d index file(s)\n",
-		prefix, plan.Packages, sources, len(plan.Uploads), humanBytes(plan.BytesToUpload),
+		prefix, plan.Packages, sources, len(plan.Uploads), progress.Bytes(plan.BytesToUpload),
 		len(plan.Skipped), moved, signed, len(plan.MetadataFiles))
 }
 
@@ -316,7 +318,3 @@ func printSourcesLine(cmd *cobra.Command, r *repo.Repo, baseURL string) {
 	fmt.Fprintf(cmd.OutOrStdout(), "\nAdd this repository with:\n  deb %s %s %s\n",
 		strings.TrimRight(baseURL, "/"), r.Suite(), effectiveComponent())
 }
-
-// humanBytes renders a byte count in the largest unit that keeps it readable.
-// The progress display formats the same figures, so both read alike.
-func humanBytes(n int64) string { return progress.Bytes(n) }

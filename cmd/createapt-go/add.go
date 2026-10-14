@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/danudey/createrepo-go/internal/cli"
+
 	"github.com/spf13/cobra"
 
 	"github.com/danudey/createrepo-go/pkg/apt/debmeta"
@@ -62,7 +64,7 @@ rather than re-uploaded when the backend supports it.`,
 			printPruneWarnings(cmd, kept, broken)
 			printDependencyWarnings(cmd, r)
 
-			plan, err := r.Commit(ctx(cmd))
+			plan, err := r.Commit(cli.Ctx(cmd))
 			if err != nil {
 				return err
 			}

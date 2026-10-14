@@ -1,12 +1,13 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/danudey/createrepo-go/internal/cli"
 
 	"github.com/danudey/createrepo-go/pkg/gpg"
 
@@ -191,7 +192,7 @@ packages are never downloaded.`,
 	pf.StringVar(&gf.gpgKey, "gpg-key", "", "path to a GPG private key file (for signing)")
 	pf.StringVar(&gf.gpgKeyID, "gpg-key-id", "", "GPG key id/uid from the local keyring (for signing)")
 	pf.StringVar(&gf.gpgPass, "gpg-passphrase", os.Getenv("CREATEAPT_GPG_PASSPHRASE"), "passphrase for the signing key (or set CREATEAPT_GPG_PASSPHRASE)")
-	pf.BoolVar(&gf.gpgNoPrompt, "gpg-no-prompt", envBool("CREATEAPT_GPG_NO_PROMPT"), "never let gpg ask for a key passphrase; fail instead of prompting (or set CREATEAPT_GPG_NO_PROMPT=1). Use this in CI, where a prompt hangs the job")
+	pf.BoolVar(&gf.gpgNoPrompt, "gpg-no-prompt", cli.EnvBool("CREATEAPT_GPG_NO_PROMPT"), "never let gpg ask for a key passphrase; fail instead of prompting (or set CREATEAPT_GPG_NO_PROMPT=1). Use this in CI, where a prompt hangs the job")
 	pf.StringArrayVar(&gf.keyrings, "keyring", nil, "public keyring file to verify a repository's Release against (repeatable)")
 
 	root.AddCommand(addCmd(), removeCmd(), rebuildCmd(), copyCmd(), createCmd(), listCmd(), verifyCmd(), checkCmd())
@@ -211,55 +212,11 @@ func preRunE(cmd *cobra.Command, args []string) error {
 	if err := resolveSignRelease(cmd); err != nil {
 		return err
 	}
-	setupProgress(cmd)
-	applyAWSEnv()
+	prog = cli.SetupProgress(cmd, gf.progress)
+	cli.ApplyAWSEnv(gf.awsProfile, gf.awsRegion)
 	backend.InsecureIgnoreHostKey = gf.insecureIgnoreHostKey
 	gpg.NoPassphrasePrompt = gf.gpgNoPrompt
 	return validateSigningFlags()
-}
-
-// setupProgress builds the progress display and routes the command's own
-// output through it.
-//
-// The bars are drawn on stderr, so a run whose stdout is piped into something
-// else still produces exactly the output it always did. Every other line the
-// command prints has to go through the display as well: written straight to the
-// terminal it would be painted over by the next redraw.
-func setupProgress(cmd *cobra.Command) {
-	// Cleared first so a second command in the same process (the tests) does
-	// not inherit the previous one's display.
-	prog = progress.New(cmd.ErrOrStderr(), gf.progress)
-	if prog == nil {
-		return
-	}
-	cmd.SetOut(prog.Wrap(cmd.OutOrStdout()))
-	cmd.SetErr(prog.Wrap(cmd.ErrOrStderr()))
-}
-
-// envBool reads a boolean from the environment, accepting the spellings a CI
-// configuration is likely to use. An unset or unrecognised value is false.
-func envBool(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
-}
-
-// applyAWSEnv translates --profile/--region into the AWS_PROFILE/AWS_REGION
-// environment variables consulted by the AWS SDK's default config loader. Only
-// flags the user actually set are applied, so an existing environment (or the
-// default profile) is left untouched otherwise.
-//
-// os.Setenv only fails on a malformed name, and both names here are constants.
-func applyAWSEnv() {
-	if gf.awsProfile != "" {
-		_ = os.Setenv("AWS_PROFILE", gf.awsProfile)
-	}
-	if gf.awsRegion != "" {
-		_ = os.Setenv("AWS_REGION", gf.awsRegion)
-	}
 }
 
 // resolveSignRelease collapses --sign-release and --no-sign-release into the
@@ -376,7 +333,7 @@ func repoOptions(create bool) (repo.Options, error) {
 	opts := repo.Options{
 		Suite:                      gf.suite,
 		Component:                  gf.component,
-		Architectures:              splitList(gf.arches),
+		Architectures:              cli.SplitList(gf.arches),
 		FlatPool:                   !gf.poolLayout,
 		NoByHash:                   !gf.byHash,
 		Validity:                   gf.validity,
@@ -425,12 +382,4 @@ func releaseSigner() (repo.Signer, error) {
 	default:
 		return nil, fmt.Errorf("signing the Release requires --gpg-key or --gpg-key-id (or --no-sign-release to publish unsigned)")
 	}
-}
-
-// ctx returns a context tied to the command.
-func ctx(cmd *cobra.Command) context.Context {
-	if c := cmd.Context(); c != nil {
-		return c
-	}
-	return context.Background()
 }

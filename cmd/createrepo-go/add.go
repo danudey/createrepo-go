@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/danudey/createrepo-go/internal/cli"
+
 	"github.com/spf13/cobra"
 
 	"github.com/danudey/createrepo-go/pkg/rpm/sign"
@@ -87,12 +89,12 @@ supports it.`,
 				if err != nil {
 					return fmt.Errorf("add %s: %w", p, err)
 				}
-				fmt.Fprintf(stdout(cmd), "staged %s -> %s\n", pkg.NEVRA(), pkg.Location)
+				fmt.Fprintf(cmd.OutOrStdout(), "staged %s -> %s\n", pkg.NEVRA(), pkg.Location)
 			}
 			kept, broken := r.PruneWarnings()
 			printPruneWarnings(cmd, kept, broken)
 
-			plan, err := r.Commit(ctx(cmd))
+			plan, err := r.Commit(cli.Ctx(cmd))
 			if err != nil {
 				return err
 			}

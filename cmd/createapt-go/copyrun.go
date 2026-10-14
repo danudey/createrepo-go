@@ -6,6 +6,10 @@ import (
 	"io"
 	"strings"
 
+	"github.com/danudey/createrepo-go/internal/cli"
+	"github.com/danudey/createrepo-go/pkg/progress"
+	"github.com/danudey/createrepo-go/pkg/xfer"
+
 	"github.com/spf13/cobra"
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
@@ -32,7 +36,7 @@ func copyExact(cmd *cobra.Command, src *repo.Repo, srcLoc string, srcCfg *repoco
 		}
 	}
 
-	objs, listed, err := src.Objects(ctx(cmd))
+	objs, listed, err := src.Objects(cli.Ctx(cmd))
 	if err != nil {
 		return err
 	}
@@ -42,11 +46,11 @@ func copyExact(cmd *cobra.Command, src *repo.Repo, srcLoc string, srcCfg *repoco
 
 	prune := cf.overwrite && dstExists
 	fmt.Fprintf(out, "Copy %s -> %s (exact, suite %s, %d object(s), %s)\n",
-		srcLoc, dstLoc, src.Suite(), len(objs), humanBytes(totalObjectSize(objs)))
+		srcLoc, dstLoc, src.Suite(), len(objs), progress.Bytes(xfer.TotalSize(objs)))
 	if prune {
 		fmt.Fprintf(out, "  --overwrite: files at the destination that the source does not have will be deleted\n")
 		if !cf.assumeYes && !gf.dryRun {
-			if !promptYesNo(cmd, "Proceed?") {
+			if !cli.PromptYesNo(cmd, "Proceed?") {
 				fmt.Fprintln(out, "aborted; no changes made")
 				return nil
 			}
@@ -57,7 +61,7 @@ func copyExact(cmd *cobra.Command, src *repo.Repo, srcLoc string, srcCfg *repoco
 	if gf.dryRun {
 		prefix = dryRunPrefix
 	}
-	stats, err := repo.CopyExact(ctx(cmd), src.Backend(), dstBE, objs, repo.CopyOptions{
+	stats, err := repo.CopyExact(cli.Ctx(cmd), src.Backend(), dstBE, objs, repo.CopyOptions{
 		DryRun:  gf.dryRun,
 		Force:   gf.force,
 		Prune:   prune,
@@ -85,7 +89,7 @@ func copyExact(cmd *cobra.Command, src *repo.Repo, srcLoc string, srcCfg *repoco
 	writeRepoConfig(cmd, dstBE, &cfg)
 
 	fmt.Fprintf(out, "%s%d object(s) copied (%s), %d already present%s\n",
-		prefix, stats.Copied, humanBytes(stats.Bytes), stats.Skipped, deletedSuffix(stats))
+		prefix, stats.Copied, progress.Bytes(stats.Bytes), stats.Skipped, cli.DeletedSuffix(len(stats.Deleted)))
 	return nil
 }
 
@@ -102,7 +106,7 @@ func resignCopiedRelease(cmd *cobra.Command, src *repo.Repo, dstBE backend.Backe
 	if err != nil {
 		return err
 	}
-	raw, err := src.RawRelease(ctx(cmd))
+	raw, err := src.RawRelease(cli.Ctx(cmd))
 	if err != nil {
 		return fmt.Errorf("reading the source's Release to re-sign it: %w", err)
 	}
@@ -128,7 +132,7 @@ func resignCopiedRelease(cmd *cobra.Command, src *repo.Repo, dstBE backend.Backe
 		{aptdata.ReleaseGPGPath(suite), detached},
 		{aptdata.InReleasePath(suite), inline},
 	} {
-		if err := dstBE.Put(ctx(cmd), spec.path, bytes.NewReader(spec.data), int64(len(spec.data))); err != nil {
+		if err := dstBE.Put(cli.Ctx(cmd), spec.path, bytes.NewReader(spec.data), int64(len(spec.data))); err != nil {
 			return fmt.Errorf("write %s: %w", spec.path, err)
 		}
 		fmt.Fprintf(out, "signed  %s\n", spec.path)
@@ -184,7 +188,7 @@ func copyRebuilding(cmd *cobra.Command, run copyRun) error {
 		if run.dstExists && !cf.assumeYes && !gf.dryRun {
 			fmt.Fprintf(run.out, "--overwrite: the %d package(s) already in %s at %s are dropped, and any pool file the new indexes do not reference is deleted\n",
 				existing, run.dstSuite, run.dstLoc)
-			if !promptYesNo(cmd, "Proceed?") {
+			if !cli.PromptYesNo(cmd, "Proceed?") {
 				fmt.Fprintln(run.out, "aborted; no changes made")
 				return nil
 			}
@@ -198,7 +202,7 @@ func copyRebuilding(cmd *cobra.Command, run copyRun) error {
 	fmt.Fprintf(run.out, "Copy %s -> %s (rebuilding indexes, suite %s, %d package(s))\n",
 		run.srcLoc, run.dstLoc, run.dstSuite, len(run.selected))
 
-	stats, err := dst.CopyEntriesFrom(ctx(cmd), run.src.Backend(), run.selected, repo.EntryCopyOptions{
+	stats, err := dst.CopyEntriesFrom(cli.Ctx(cmd), run.src.Backend(), run.selected, repo.EntryCopyOptions{
 		Relocate:        run.relocate || cf.dstComponent != "",
 		Component:       cf.dstComponent,
 		RebuildMetadata: cf.rebuildMetadata,
@@ -221,7 +225,7 @@ func copyRebuilding(cmd *cobra.Command, run copyRun) error {
 		}
 	}
 
-	plan, err := dst.Commit(ctx(cmd))
+	plan, err := dst.Commit(cli.Ctx(cmd))
 	if err != nil {
 		return err
 	}
@@ -243,7 +247,7 @@ func copyRebuilding(cmd *cobra.Command, run copyRun) error {
 	writeRepoConfig(cmd, dst.Backend(), &cfg)
 
 	fmt.Fprintf(run.out, "%s%d file(s) transferred (%s), %d already present\n",
-		prefix, stats.Copied, humanBytes(stats.Bytes), stats.Skipped)
+		prefix, stats.Copied, progress.Bytes(stats.Bytes), stats.Skipped)
 	return nil
 }
 
@@ -285,21 +289,4 @@ func transformReasons(run copyRun) []string {
 		why = append(why, "the requested changes")
 	}
 	return why
-}
-
-func totalObjectSize(objs []repo.SourceObject) int64 {
-	var total int64
-	for _, o := range objs {
-		if o.Size > 0 {
-			total += o.Size
-		}
-	}
-	return total
-}
-
-func deletedSuffix(stats *repo.CopyStats) string {
-	if len(stats.Deleted) == 0 {
-		return ""
-	}
-	return fmt.Sprintf(", %d extraneous file(s) deleted", len(stats.Deleted))
 }
