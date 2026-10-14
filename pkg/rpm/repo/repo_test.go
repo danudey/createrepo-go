@@ -367,3 +367,46 @@ func TestObsoleteMetadataGarbageCollected(t *testing.T) {
 		t.Errorf("found %d primary metadata files after update; want 1 (old should be GC'd): %v", len(metas), metas)
 	}
 }
+
+// fakeSigner produces a fixed "signature", enough to exercise the publish path
+// without gpg.
+type fakeSigner struct{}
+
+func (fakeSigner) SignDetached([]byte) ([]byte, error) { return []byte("signature"), nil }
+
+// Publishing unsigned over a signed repository must not leave the old
+// signature behind: it no longer matches repomd.xml, and dnf with
+// repo_gpgcheck=1 rejects the repository over it.
+func TestUnsignedPublishRemovesTheStaleSignature(t *testing.T) {
+	dir := t.TempDir()
+	inner, err := backend.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := OpenWith(context.Background(), inner, Options{Create: true, Signer: fakeSigner{}, now: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.AddRPM(helloRPM()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Commit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	asc := filepath.Join(dir, "repodata", "repomd.xml.asc")
+	if _, err := os.Stat(asc); err != nil {
+		t.Fatalf("signed publish wrote no signature: %v", err)
+	}
+
+	r2, _ := newLocalRepo(t, dir, false)
+	defer r2.Close()
+	if _, err := r2.AddRPM(libfooRPM()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r2.Commit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(asc); !os.IsNotExist(err) {
+		t.Errorf("unsigned publish left repomd.xml.asc in place (stat: %v)", err)
+	}
+}

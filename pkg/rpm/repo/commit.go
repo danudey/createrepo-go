@@ -131,6 +131,14 @@ func (r *Repo) Commit(ctx context.Context) (*Plan, error) {
 		if err := r.putBytes(ctx, repomdPath+".asc", meta.repomdSig); err != nil {
 			return nil, fmt.Errorf("write repomd.xml.asc: %w", err)
 		}
+	} else if r.old != nil {
+		// The repository was signed before and is not now. A signature left
+		// behind no longer matches the new repomd.xml, and a client with
+		// repo_gpgcheck=1 would reject the repository rather than treat it as
+		// unsigned.
+		if err := r.be.Delete(ctx, repomdPath+".asc"); err != nil {
+			return nil, fmt.Errorf("delete stale repomd.xml.asc: %w", err)
+		}
 	}
 
 	// 5. Garbage-collect superseded metadata and RPMs no longer referenced
