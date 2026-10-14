@@ -2,14 +2,11 @@ package repo
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"path"
-	"sort"
-	"strings"
 	"sync"
 
-	"github.com/danudey/createrepo-go/pkg/xfer"
+	"github.com/danudey/createrepo-go/internal/parallel"
+	"github.com/danudey/createrepo-go/pkg/integrity"
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
 	"github.com/danudey/createrepo-go/pkg/backend"
@@ -17,27 +14,11 @@ import (
 )
 
 // Problem is one discrepancy found while verifying a published repository.
-type Problem struct {
-	// Kind groups the finding: "package", "dependency".
-	Kind string
-	// Subject names what is wrong — a package identifier, or a dependency.
-	Subject string
-	// Location is the repo-relative path involved, when there is one.
-	Location string
-	// Detail explains the discrepancy.
-	Detail string
-}
-
-func (p Problem) String() string {
-	if p.Location != "" {
-		return fmt.Sprintf("%s: %s (%s)", p.Subject, p.Detail, p.Location)
-	}
-	return fmt.Sprintf("%s: %s", p.Subject, p.Detail)
-}
+type Problem = integrity.Problem
 
 // ChecksumMode selects how thoroughly Verify checks that each published file's
 // content matches the checksum the indexes record.
-type ChecksumMode int
+type ChecksumMode = integrity.Mode
 
 const (
 	// ChecksumCheap uses only a checksum the backend can supply without
@@ -46,12 +27,12 @@ const (
 	// time, and on plain HTTP there is none at all. Files whose checksum could
 	// not be confirmed from content are counted in
 	// VerifyResult.ChecksumUnconfirmed rather than reported as problems.
-	ChecksumCheap ChecksumMode = iota
+	ChecksumCheap = integrity.Cheap
 
 	// ChecksumContent proves every file's checksum from its bytes, downloading
 	// it when the backend cannot hash content itself. It is the only mode that
 	// detects an object whose content changed after it was published.
-	ChecksumContent
+	ChecksumContent = integrity.Content
 )
 
 // VerifyOptions configures Verify.
@@ -67,7 +48,7 @@ type VerifyOptions struct {
 	// SkipDependencies omits the intra-repository dependency check.
 	SkipDependencies bool
 
-	// Tracker, if set, is called once per entry as its check finishes. It may
+	// Progress, if set, is called once per entry as its check finishes. It may
 	// be called from several goroutines at once.
 	Progress func(e aptdata.Entry, problems int)
 
@@ -135,39 +116,24 @@ func (r *Repo) Verify(ctx context.Context, opt VerifyOptions) (*VerifyResult, er
 	opt.Tracker.Begin("verify", entryFileCount(entries), expectedBytes)
 	defer opt.Tracker.End()
 
-	conc := opt.Concurrency
-	if conc < 1 {
-		conc = 1
-	}
-	var (
-		mu  sync.Mutex
-		wg  sync.WaitGroup
-		sem = make(chan struct{}, conc)
-	)
-	for _, e := range entries {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(e aptdata.Entry) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			one := r.verifyEntry(ctx, e, opt)
+	var mu sync.Mutex
+	parallel.Each(entries, opt.Concurrency, func(e aptdata.Entry) {
+		one := r.verifyEntry(ctx, e, opt)
 
-			mu.Lock()
-			res.Problems = append(res.Problems, one.problems...)
-			res.Files += one.files
-			res.ChecksumVerified += one.verified
-			res.ChecksumRecorded += one.recorded
-			res.ChecksumUnconfirmed += one.unconfirmed
-			res.Downloaded += one.downloaded
-			res.BytesRead += one.bytesRead
-			mu.Unlock()
+		mu.Lock()
+		res.Problems = append(res.Problems, one.problems...)
+		res.Files += one.files
+		res.ChecksumVerified += one.tally.Verified
+		res.ChecksumRecorded += one.tally.Recorded
+		res.ChecksumUnconfirmed += one.tally.Unconfirmed
+		res.Downloaded += one.tally.Downloaded
+		res.BytesRead += one.tally.BytesRead
+		mu.Unlock()
 
-			if opt.Progress != nil {
-				opt.Progress(e, len(one.problems))
-			}
-		}(e)
-	}
-	wg.Wait()
+		if opt.Progress != nil {
+			opt.Progress(e, len(one.problems))
+		}
+	})
 
 	if !opt.SkipDependencies {
 		for _, dp := range r.CheckDependencies() {
@@ -180,31 +146,22 @@ func (r *Repo) Verify(ctx context.Context, opt VerifyOptions) (*VerifyResult, er
 		}
 	}
 
-	sort.Slice(res.Problems, func(i, j int) bool {
-		a, b := res.Problems[i], res.Problems[j]
-		if a.Subject != b.Subject {
-			return a.Subject < b.Subject
-		}
-		return a.Detail < b.Detail
-	})
+	integrity.SortProblems(res.Problems)
 	return res, nil
 }
 
 // entryVerdict is one entry's contribution to a VerifyResult.
 type entryVerdict struct {
-	problems    []Problem
-	files       int
-	verified    int
-	recorded    int
-	unconfirmed int
-	downloaded  int
-	bytesRead   int64
+	problems []Problem
+	files    int
+	tally    integrity.Tally
 }
 
-func (v *entryVerdict) fail(e aptdata.Entry, location, detail string) {
-	v.problems = append(v.problems, Problem{
-		Kind: "package", Subject: e.ID3(), Location: location, Detail: detail,
-	})
+// aptWording names a verify finding in createapt-go's terms.
+var aptWording = integrity.Wording{
+	Records: "the index",
+	Missing: "the file the index references is missing",
+	Object:  "the file",
 }
 
 // verifyEntry checks every file an entry owns. A binary package owns one; a
@@ -215,8 +172,14 @@ func (r *Repo) verifyEntry(ctx context.Context, e aptdata.Entry, opt VerifyOptio
 	for _, f := range entryFiles(e) {
 		v.files++
 		task := opt.Tracker.Item(path.Base(f.location), f.size)
-		r.verifyFile(ctx, e, f, opt, &v, task)
+		details, tally := integrity.Check(ctx, r.be,
+			integrity.File{Location: f.location, Size: f.size, SHA256: f.sha256},
+			opt.Checksums, aptWording, func() *progress.Item { return task })
 		task.Done()
+		v.tally.Add(tally)
+		for _, d := range details {
+			v.problems = append(v.problems, Problem{Kind: "package", Subject: e.ID3(), Location: f.location, Detail: d})
+		}
 	}
 	return v
 }
@@ -244,86 +207,4 @@ func entryFiles(e aptdata.Entry) []verifiableFile {
 	default:
 		return nil
 	}
-}
-
-// verifyFile checks one published file's presence, size and checksum.
-func (r *Repo) verifyFile(ctx context.Context, e aptdata.Entry, f verifiableFile, opt VerifyOptions, v *entryVerdict, task *progress.Item) {
-	fi, err := r.be.Stat(ctx, f.location)
-	switch {
-	case errors.Is(err, backend.ErrNotExist):
-		v.fail(e, f.location, "the file the index references is missing")
-		return
-	case err != nil:
-		v.fail(e, f.location, "stat failed: "+err.Error())
-		return
-	}
-	if f.size > 0 && fi.Size != f.size {
-		v.fail(e, f.location, fmt.Sprintf("size %d does not match the %d the index records", fi.Size, f.size))
-		// Keep going: the checksum tells the operator whether the file is a
-		// different build or a damaged one.
-	}
-
-	if f.sha256 == "" {
-		v.unconfirmed++
-		return
-	}
-
-	// Content is authoritative. Use the backend's own hash only when it is
-	// computed from the stored bytes; otherwise fall back to reading the object.
-	if backend.HashesContent(r.be) {
-		hasher := r.be.(backend.RemoteHasher)
-		sum, ok, err := hasher.Hash(ctx, f.location, backend.AlgoSHA256)
-		switch {
-		case err != nil && !errors.Is(err, backend.ErrNotExist):
-			v.fail(e, f.location, "checksum could not be computed: "+err.Error())
-			return
-		case ok:
-			if !strings.EqualFold(sum, f.sha256) {
-				v.fail(e, f.location, fmt.Sprintf("content checksum %s does not match the %s the index records", sum, f.sha256))
-			} else {
-				v.verified++
-			}
-			return
-		}
-		// ok == false: the backend could not answer after all; fall through.
-	}
-
-	if opt.Checksums != ChecksumContent {
-		// Cheap mode: accept a recorded checksum as corroboration, and record
-		// honestly when there is nothing to go on.
-		if hasher, isHasher := r.be.(backend.RemoteHasher); isHasher {
-			sum, ok, err := hasher.Hash(ctx, f.location, backend.AlgoSHA256)
-			if err != nil && !errors.Is(err, backend.ErrNotExist) {
-				v.fail(e, f.location, "recorded checksum could not be read: "+err.Error())
-				return
-			}
-			if ok {
-				if !strings.EqualFold(sum, f.sha256) {
-					v.fail(e, f.location, fmt.Sprintf("the checksum %s recorded by the store does not match the %s the index records", sum, f.sha256))
-				} else {
-					v.recorded++
-				}
-				return
-			}
-		}
-		v.unconfirmed++
-		return
-	}
-
-	// Content mode against a backend that cannot hash for us: read the object.
-	sum, n, err := xfer.HashObject(ctx, r.be, f.location, task)
-	v.downloaded++
-	v.bytesRead += n
-	if err != nil {
-		v.fail(e, f.location, "reading the file to check its checksum: "+err.Error())
-		return
-	}
-	if f.size > 0 && n != f.size {
-		v.fail(e, f.location, fmt.Sprintf("read %d bytes, but the index records a size of %d", n, f.size))
-	}
-	if !strings.EqualFold(sum, f.sha256) {
-		v.fail(e, f.location, fmt.Sprintf("content checksum %s does not match the %s the index records", sum, f.sha256))
-		return
-	}
-	v.verified++
 }

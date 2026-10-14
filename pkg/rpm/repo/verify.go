@@ -2,41 +2,23 @@ package repo
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"path"
-	"sort"
-	"strings"
 	"sync"
 
-	"github.com/danudey/createrepo-go/pkg/xfer"
+	"github.com/danudey/createrepo-go/internal/parallel"
+	"github.com/danudey/createrepo-go/pkg/integrity"
+	"github.com/danudey/createrepo-go/pkg/progress"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
 	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
 )
 
 // Problem is one discrepancy found while verifying a published repository.
-type Problem struct {
-	// Kind groups the finding: "package", "dependency".
-	Kind string
-	// Subject names what is wrong — a package NEVRA, or a dependency.
-	Subject string
-	// Location is the repo-relative path involved, when there is one.
-	Location string
-	// Detail explains the discrepancy.
-	Detail string
-}
-
-func (p Problem) String() string {
-	if p.Location != "" {
-		return fmt.Sprintf("%s: %s (%s)", p.Subject, p.Detail, p.Location)
-	}
-	return fmt.Sprintf("%s: %s", p.Subject, p.Detail)
-}
+type Problem = integrity.Problem
 
 // ChecksumMode selects how thoroughly Verify checks that each RPM's content
 // matches the pkgid the metadata records.
-type ChecksumMode int
+type ChecksumMode = integrity.Mode
 
 const (
 	// ChecksumCheap uses only a checksum the backend can supply without
@@ -45,13 +27,13 @@ const (
 	// time, and on plain HTTP there is none at all. Packages whose checksum
 	// could not be confirmed from content are counted in
 	// VerifyResult.ChecksumUnconfirmed rather than reported as problems.
-	ChecksumCheap ChecksumMode = iota
+	ChecksumCheap = integrity.Cheap
 
 	// ChecksumContent proves every package's checksum from its bytes,
 	// downloading it when the backend cannot hash content itself. It is the
 	// only mode that detects an object whose content changed after it was
 	// published.
-	ChecksumContent
+	ChecksumContent = integrity.Content
 )
 
 // VerifyOptions configures Verify.
@@ -125,35 +107,23 @@ func (r *Repo) Verify(ctx context.Context, opt VerifyOptions) (*VerifyResult, er
 		}
 	}
 
-	conc := max(opt.Concurrency, 1)
-	var (
-		mu  sync.Mutex
-		wg  sync.WaitGroup
-		sem = make(chan struct{}, conc)
-	)
-	for _, p := range pkgs {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(p *repodata.Package) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			one := r.verifyPackage(ctx, p, opt)
+	var mu sync.Mutex
+	parallel.Each(pkgs, opt.Concurrency, func(p *repodata.Package) {
+		problems, tally := r.verifyPackage(ctx, p, opt)
 
-			mu.Lock()
-			res.Problems = append(res.Problems, one.problems...)
-			res.ChecksumVerified += one.verified
-			res.ChecksumRecorded += one.recorded
-			res.ChecksumUnconfirmed += one.unconfirmed
-			res.Downloaded += one.downloaded
-			res.BytesRead += one.bytesRead
-			mu.Unlock()
+		mu.Lock()
+		res.Problems = append(res.Problems, problems...)
+		res.ChecksumVerified += tally.Verified
+		res.ChecksumRecorded += tally.Recorded
+		res.ChecksumUnconfirmed += tally.Unconfirmed
+		res.Downloaded += tally.Downloaded
+		res.BytesRead += tally.BytesRead
+		mu.Unlock()
 
-			if opt.Progress != nil {
-				opt.Progress(p, len(one.problems))
-			}
-		}(p)
-	}
-	wg.Wait()
+		if opt.Progress != nil {
+			opt.Progress(p, len(problems))
+		}
+	})
 
 	if !opt.SkipDependencies {
 		for _, dp := range r.CheckDependencies() {
@@ -166,118 +136,32 @@ func (r *Repo) Verify(ctx context.Context, opt VerifyOptions) (*VerifyResult, er
 		}
 	}
 
-	sort.Slice(res.Problems, func(i, j int) bool {
-		a, b := res.Problems[i], res.Problems[j]
-		if a.Subject != b.Subject {
-			return a.Subject < b.Subject
-		}
-		return a.Detail < b.Detail
-	})
+	integrity.SortProblems(res.Problems)
 	return res, nil
 }
 
-// packageVerdict is one package's contribution to a VerifyResult.
-type packageVerdict struct {
-	problems    []Problem
-	verified    int
-	recorded    int
-	unconfirmed int
-	downloaded  int
-	bytesRead   int64
-}
-
-func (v *packageVerdict) fail(p *repodata.Package, detail string) {
-	v.problems = append(v.problems, Problem{
-		Kind: "package", Subject: p.NEVRA(), Location: p.Location, Detail: detail,
-	})
+// rpmWording names a verify finding in createrepo-go's terms.
+var rpmWording = integrity.Wording{
+	Records:  "the metadata",
+	SumLabel: "pkgid ",
+	Missing:  "the RPM the metadata references is missing",
+	Object:   "the RPM",
 }
 
 // verifyPackage checks one package's presence, size and checksum.
-func (r *Repo) verifyPackage(ctx context.Context, p *repodata.Package, opt VerifyOptions) packageVerdict {
-	var v packageVerdict
-
-	fi, err := r.be.Stat(ctx, p.Location)
-	switch {
-	case errors.Is(err, backend.ErrNotExist):
-		v.fail(p, "the RPM the metadata references is missing")
+func (r *Repo) verifyPackage(ctx context.Context, p *repodata.Package, opt VerifyOptions) ([]Problem, integrity.Tally) {
+	f := integrity.File{Location: p.Location, Size: p.SizePackage, SHA256: sha256Only(p.PkgID, p.ChecksumType)}
+	details, tally := integrity.Check(ctx, r.be, f, opt.Checksums, rpmWording, func() *progress.Item {
+		return r.opt.Tracker.Item(path.Base(p.Location), p.SizePackage)
+	})
+	// The progress display, when there is one, covers the downloads; a package
+	// settled without one comes off its total.
+	if tally.Downloaded == 0 {
 		r.opt.Tracker.Skip(1, p.SizePackage)
-		return v
-	case err != nil:
-		v.fail(p, "stat failed: "+err.Error())
-		r.opt.Tracker.Skip(1, p.SizePackage)
-		return v
 	}
-	if p.SizePackage > 0 && fi.Size != p.SizePackage {
-		v.fail(p, fmt.Sprintf("size %d does not match the %d the metadata records", fi.Size, p.SizePackage))
-		// Keep going: the checksum tells the operator whether the file is a
-		// different build or a damaged one.
+	problems := make([]Problem, 0, len(details))
+	for _, d := range details {
+		problems = append(problems, Problem{Kind: "package", Subject: p.NEVRA(), Location: p.Location, Detail: d})
 	}
-
-	if p.PkgID == "" {
-		v.unconfirmed++
-		r.opt.Tracker.Skip(1, p.SizePackage)
-		return v
-	}
-
-	// Content is authoritative. Use the backend's own hash only when it is
-	// computed from the stored bytes; otherwise fall back to reading the object.
-	if backend.HashesContent(r.be) {
-		hasher := r.be.(backend.RemoteHasher)
-		sum, ok, err := hasher.Hash(ctx, p.Location, r.opt.checksumType())
-		switch {
-		case err != nil && !errors.Is(err, backend.ErrNotExist):
-			v.fail(p, "checksum could not be computed: "+err.Error())
-			return v
-		case ok:
-			if !strings.EqualFold(sum, p.PkgID) {
-				v.fail(p, fmt.Sprintf("content checksum %s does not match the pkgid %s the metadata records", sum, p.PkgID))
-			} else {
-				v.verified++
-			}
-			return v
-		}
-		// ok == false: the backend could not answer after all; fall through.
-	}
-
-	if opt.Checksums != ChecksumContent {
-		// Cheap mode: accept a recorded checksum as corroboration, and record
-		// honestly when there is nothing to go on.
-		if hasher, isHasher := r.be.(backend.RemoteHasher); isHasher {
-			sum, ok, err := hasher.Hash(ctx, p.Location, r.opt.checksumType())
-			if err != nil && !errors.Is(err, backend.ErrNotExist) {
-				v.fail(p, "recorded checksum could not be read: "+err.Error())
-				return v
-			}
-			if ok {
-				if !strings.EqualFold(sum, p.PkgID) {
-					v.fail(p, fmt.Sprintf("the checksum %s recorded by the store does not match the pkgid %s the metadata records", sum, p.PkgID))
-				} else {
-					v.recorded++
-				}
-				return v
-			}
-		}
-		v.unconfirmed++
-		return v
-	}
-
-	// Content mode against a backend that cannot hash for us: read the object.
-	item := r.opt.Tracker.Item(path.Base(p.Location), p.SizePackage)
-	sum, n, err := xfer.HashObject(ctx, r.be, p.Location, item)
-	item.Done()
-	v.downloaded++
-	v.bytesRead += n
-	if err != nil {
-		v.fail(p, "reading the RPM to check its checksum: "+err.Error())
-		return v
-	}
-	if p.SizePackage > 0 && n != p.SizePackage {
-		v.fail(p, fmt.Sprintf("read %d bytes, but the metadata records a size of %d", n, p.SizePackage))
-	}
-	if !strings.EqualFold(sum, p.PkgID) {
-		v.fail(p, fmt.Sprintf("content checksum %s does not match the pkgid %s the metadata records", sum, p.PkgID))
-		return v
-	}
-	v.verified++
-	return v
+	return problems, tally
 }
