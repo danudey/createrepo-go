@@ -43,7 +43,7 @@ var binary = sync.OnceValues(func() (string, error) {
 
 // repoRoot locates the module root from the test's working directory.
 func repoRoot() (string, error) {
-	dir, err := filepath.Abs(filepath.Join("..", ".."))
+	dir, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {
 		return "", err
 	}

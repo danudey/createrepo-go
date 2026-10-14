@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"path"
 	"strings"
 )
 
@@ -116,7 +117,7 @@ type Copier interface {
 // one where reading them means a download.
 type FileStore interface {
 	// LocalPath returns the filesystem path of the named object. The object
-	// need not exist.
+	// need not exist. It returns "" for a path that would escape the root.
 	LocalPath(relpath string) string
 }
 
@@ -127,7 +128,26 @@ func LocalPath(be Backend, relpath string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	return fs.LocalPath(relpath), true
+	p := fs.LocalPath(relpath)
+	return p, p != ""
+}
+
+// ErrUnsafePath is returned for an object path that would resolve outside the
+// repository root, such as "../../etc/passwd". Object paths often come from a
+// repository's own metadata (an rpm location href, an apt Filename field), so
+// a hostile or corrupt repository can name anything; a copy from one must not
+// be able to write beside the destination rather than into it.
+var ErrUnsafePath = errors.New("backend: path escapes the repository root")
+
+// remoteRel validates a slash-separated object path for a backend that joins
+// it onto a POSIX root directory, returning it without leading slashes. A
+// leading slash means the repository root, as it always has.
+func remoteRel(relpath string) (string, error) {
+	rel := strings.TrimLeft(relpath, "/")
+	if c := path.Clean(rel); c == ".." || strings.HasPrefix(c, "../") {
+		return "", fmt.Errorf("%w: %q", ErrUnsafePath, relpath)
+	}
+	return rel, nil
 }
 
 // IsLocal reports whether a backend's objects are local files.
