@@ -7,8 +7,11 @@ import (
 	"path"
 	"sort"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/danudey/createrepo-go/internal/parallel"
+
+	"github.com/danudey/createrepo-go/pkg/checkcore"
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
 	"github.com/danudey/createrepo-go/pkg/apt/debmeta"
@@ -17,52 +20,28 @@ import (
 )
 
 // Level selects how deep the checks go. Each level is cumulative.
-type Level int
+type Level = checkcore.Level
 
 // The available check levels, in increasing order of cost.
 const (
-	LevelMetadata Level = iota // Release + index files present and valid
-	LevelHead                  // + packages exist with the correct size
-	LevelFetch                 // + packages downloaded, checksums verified, archive parsed
+	LevelMetadata = checkcore.LevelMetadata // Release + index files present and valid
+	LevelHead     = checkcore.LevelHead     // + packages exist with the correct size
+	LevelFetch    = checkcore.LevelFetch    // + packages downloaded, checksums verified, archive parsed
 )
 
-func (l Level) String() string {
-	switch l {
-	case LevelMetadata:
-		return "metadata"
-	case LevelHead:
-		return "head"
-	case LevelFetch:
-		return "fetch"
-	default:
-		return "unknown"
-	}
-}
-
 // ParseLevel parses a Level from its string name.
-func ParseLevel(s string) (Level, error) {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "metadata", "meta":
-		return LevelMetadata, nil
-	case "head", "exists":
-		return LevelHead, nil
-	case "fetch", "full", "download":
-		return LevelFetch, nil
-	default:
-		return 0, fmt.Errorf("invalid level %q (want metadata|head|fetch)", s)
-	}
-}
+func ParseLevel(s string) (Level, error) { return checkcore.ParseLevel(s) }
 
 // Status is the outcome of a single check.
-type Status string
+type Status = checkcore.Status
 
 // The outcomes a single check can report. Only StatusFail means the repository
 // is broken; StatusWarn and StatusSkip leave the run successful.
 const (
-	StatusOK   Status = "OK"
-	StatusFail Status = "FAIL"
-	StatusWarn Status = "WARN"
-	StatusSkip Status = "SKIP"
+	StatusOK   = checkcore.StatusOK
+	StatusFail = checkcore.StatusFail
+	StatusWarn = checkcore.StatusWarn
+	StatusSkip = checkcore.StatusSkip
 )
 
 // The Result.Kind values reported for the repository's own metadata.
@@ -72,13 +51,7 @@ const (
 )
 
 // Result is one validated artifact.
-type Result struct {
-	Target string // the label of the repository the artifact belongs to
-	Kind   string // "Release", "index", or a package identifier
-	Loc    string // backend-relative path of the artifact
-	Status Status
-	Detail string
-}
+type Result = checkcore.Result
 
 // Config holds the resolved validation configuration.
 type Config struct {
@@ -99,41 +72,18 @@ type checker struct {
 	cfg Config
 	deb DebTool
 
-	mu      sync.Mutex
-	results []Result
-	logf    func(format string, args ...any)
+	*checkcore.Collector
 }
 
 func newChecker(cfg Config, deb DebTool, logf func(string, ...any)) *checker {
-	if logf == nil {
-		logf = func(string, ...any) {}
-	}
-	return &checker{cfg: cfg, deb: deb, logf: logf}
+	return &checker{cfg: cfg, deb: deb, Collector: checkcore.NewCollector(logf)}
 }
 
-// Results returns a copy of the accumulated results.
-func (ck *checker) Results() []Result {
-	ck.mu.Lock()
-	defer ck.mu.Unlock()
-	out := make([]Result, len(ck.results))
-	copy(out, ck.results)
-	return out
-}
-
-func (ck *checker) add(r Result) {
-	ck.mu.Lock()
-	ck.results = append(ck.results, r)
-	ck.mu.Unlock()
-	symbol := map[Status]string{StatusOK: "  ok ", StatusFail: "FAIL ", StatusWarn: "warn ", StatusSkip: "skip "}[r.Status]
-	ck.logf("[%s] %s: %s %s", symbol, r.Target, r.Kind, r.Detail)
-}
+func (ck *checker) add(r Result) { ck.Add(r) }
 
 // opCtx derives a per-operation context honoring the configured timeout.
 func (ck *checker) opCtx(ctx context.Context) (context.Context, context.CancelFunc) {
-	if ck.cfg.Timeout <= 0 {
-		return ctx, func() {}
-	}
-	return context.WithTimeout(ctx, ck.cfg.Timeout)
+	return checkcore.OpCtx(ctx, ck.cfg.Timeout)
 }
 
 // checkTarget validates one suite of one repository.
@@ -485,22 +435,9 @@ func (ck *checker) checkEntries(ctx context.Context, be backend.Backend, label s
 	// spends its width on the figures rather than repeating a long URL.
 	ck.cfg.Tracker.Begin("check", files, bytes)
 
-	conc := ck.cfg.Concurrency
-	if conc < 1 {
-		conc = 1
-	}
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, conc)
-	for _, e := range entries {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(e aptdata.Entry) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			ck.checkEntry(ctx, be, label, e)
-		}(e)
-	}
-	wg.Wait()
+	parallel.Each(entries, ck.cfg.Concurrency, func(e aptdata.Entry) {
+		ck.checkEntry(ctx, be, label, e)
+	})
 }
 
 // checkEntry validates every file an entry owns.
@@ -667,18 +604,4 @@ func sortedFiles(files []aptdata.IndexFile) []aptdata.IndexFile {
 }
 
 // Summarize counts results by status.
-func Summarize(results []Result) (ok, fail, warn, skip int) {
-	for _, r := range results {
-		switch r.Status {
-		case StatusOK:
-			ok++
-		case StatusFail:
-			fail++
-		case StatusWarn:
-			warn++
-		case StatusSkip:
-			skip++
-		}
-	}
-	return ok, fail, warn, skip
-}
+func Summarize(results []Result) (ok, fail, warn, skip int) { return checkcore.Summarize(results) }

@@ -25,8 +25,11 @@ import (
 	"path"
 	"sort"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/danudey/createrepo-go/internal/parallel"
+
+	"github.com/danudey/createrepo-go/pkg/checkcore"
 
 	"github.com/danudey/createrepo-go/pkg/compress"
 
@@ -36,65 +39,35 @@ import (
 )
 
 // Level selects how deep the checks go. Each level is cumulative.
-type Level int
+type Level = checkcore.Level
 
 // The available check levels, in increasing order of cost.
 const (
-	LevelMetadata Level = iota // repomd + index files present and valid
-	LevelHead                  // + packages exist with the correct size
-	LevelFetch                 // + packages downloaded, checksums verified, rpm -K
+	LevelMetadata = checkcore.LevelMetadata // repomd + index files present and valid
+	LevelHead     = checkcore.LevelHead     // + packages exist with the correct size
+	LevelFetch    = checkcore.LevelFetch    // + packages downloaded, checksums verified, rpm -K
 )
 
-func (l Level) String() string {
-	switch l {
-	case LevelMetadata:
-		return "metadata"
-	case LevelHead:
-		return "head"
-	case LevelFetch:
-		return "fetch"
-	default:
-		return "unknown"
-	}
-}
-
 // ParseLevel parses a Level from its string name.
-func ParseLevel(s string) (Level, error) {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "metadata", "meta":
-		return LevelMetadata, nil
-	case "head", "exists":
-		return LevelHead, nil
-	case "fetch", "full", "download":
-		return LevelFetch, nil
-	default:
-		return 0, fmt.Errorf("invalid level %q (want metadata|head|fetch)", s)
-	}
-}
+func ParseLevel(s string) (Level, error) { return checkcore.ParseLevel(s) }
 
 // Status is the outcome of a single check.
-type Status string
+type Status = checkcore.Status
 
-// The outcomes a single check can report. Only StatusFail means the
-// repository is broken; StatusWarn and StatusSkip leave the run successful.
+// The outcomes a single check can report. Only StatusFail means the repository
+// is broken; StatusWarn and StatusSkip leave the run successful.
 const (
-	StatusOK   Status = "OK"
-	StatusFail Status = "FAIL"
-	StatusWarn Status = "WARN"
-	StatusSkip Status = "SKIP"
+	StatusOK   = checkcore.StatusOK
+	StatusFail = checkcore.StatusFail
+	StatusWarn = checkcore.StatusWarn
+	StatusSkip = checkcore.StatusSkip
 )
 
 // kindRepomd is the Result.Kind reported for the repository index itself.
 const kindRepomd = "repomd.xml"
 
 // Result is one validated artifact.
-type Result struct {
-	Target string // the label of the repository the artifact belongs to
-	Kind   string // "repomd.xml", "metadata:<type>" or a package nevra
-	Loc    string // backend-relative path or URL of the artifact
-	Status Status
-	Detail string
-}
+type Result = checkcore.Result
 
 // Config holds the resolved validation configuration.
 type Config struct {
@@ -115,41 +88,18 @@ type checker struct {
 	cfg Config
 	rpm RPMTool
 
-	mu      sync.Mutex
-	results []Result
-	logf    func(format string, args ...any)
+	*checkcore.Collector
 }
 
 func newChecker(cfg Config, rpm RPMTool, logf func(string, ...any)) *checker {
-	if logf == nil {
-		logf = func(string, ...any) {}
-	}
-	return &checker{cfg: cfg, rpm: rpm, logf: logf}
+	return &checker{cfg: cfg, rpm: rpm, Collector: checkcore.NewCollector(logf)}
 }
 
-// Results returns a copy of the accumulated results.
-func (ck *checker) Results() []Result {
-	ck.mu.Lock()
-	defer ck.mu.Unlock()
-	out := make([]Result, len(ck.results))
-	copy(out, ck.results)
-	return out
-}
-
-func (ck *checker) add(r Result) {
-	ck.mu.Lock()
-	ck.results = append(ck.results, r)
-	ck.mu.Unlock()
-	symbol := map[Status]string{StatusOK: "  ok ", StatusFail: "FAIL ", StatusWarn: "warn ", StatusSkip: "skip "}[r.Status]
-	ck.logf("[%s] %s: %s %s", symbol, r.Target, r.Kind, r.Detail)
-}
+func (ck *checker) add(r Result) { ck.Add(r) }
 
 // opCtx derives a per-operation context honoring the configured timeout.
 func (ck *checker) opCtx(ctx context.Context) (context.Context, context.CancelFunc) {
-	if ck.cfg.Timeout <= 0 {
-		return ctx, func() {}
-	}
-	return context.WithTimeout(ctx, ck.cfg.Timeout)
+	return checkcore.OpCtx(ctx, ck.cfg.Timeout)
 }
 
 // getAll reads a backend object fully into memory (metadata files are small).
@@ -222,7 +172,7 @@ func (ck *checker) checkTarget(ctx context.Context, be backend.Backend, label st
 	ck.checkDependencies(label, be, pkgs)
 
 	selected := ck.selectPackages(pkgs)
-	ck.logf("%s: %d package(s) selected for %s check", label, len(selected), ck.cfg.Level)
+	ck.Logf("%s: %d package(s) selected for %s check", label, len(selected), ck.cfg.Level)
 	ck.checkPackages(ctx, be, label, selected)
 }
 
@@ -374,19 +324,9 @@ func (ck *checker) checkPackages(ctx context.Context, be backend.Backend, label 
 		defer ck.cfg.Tracker.End()
 	}
 
-	conc := max(ck.cfg.Concurrency, 1)
-	sem := make(chan struct{}, conc)
-	var wg sync.WaitGroup
-	for _, p := range pkgs {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(p *repodata.Package) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			ck.add(ck.checkPackage(ctx, be, label, p))
-		}(p)
-	}
-	wg.Wait()
+	parallel.Each(pkgs, ck.cfg.Concurrency, func(p *repodata.Package) {
+		ck.add(ck.checkPackage(ctx, be, label, p))
+	})
 }
 
 func (ck *checker) checkPackage(ctx context.Context, be backend.Backend, label string, p *repodata.Package) Result {
@@ -563,18 +503,4 @@ func toSet(items []string) map[string]struct{} {
 }
 
 // Summarize counts results by status.
-func Summarize(results []Result) (ok, fail, warn, skip int) {
-	for _, r := range results {
-		switch r.Status {
-		case StatusOK:
-			ok++
-		case StatusFail:
-			fail++
-		case StatusWarn:
-			warn++
-		case StatusSkip:
-			skip++
-		}
-	}
-	return
-}
+func Summarize(results []Result) (ok, fail, warn, skip int) { return checkcore.Summarize(results) }

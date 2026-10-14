@@ -32,9 +32,9 @@ package repocheck
 import (
 	"context"
 	"fmt"
-	"io"
-	"net/http"
 	"time"
+
+	"github.com/danudey/createrepo-go/pkg/checkcore"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
 	"github.com/danudey/createrepo-go/pkg/progress"
@@ -97,7 +97,7 @@ type Target struct {
 // no repositories to check); per-artifact failures are reported via the
 // results' Status, not the error.
 func Run(ctx context.Context, opts Options) (results []Result, warnings []string, err error) {
-	sections, err := loadRepoInput(opts.Input, fetchOverHTTP(ctx, opts.Timeout))
+	sections, err := loadRepoInput(opts.Input, checkcore.FetchOverHTTP(ctx, opts.Timeout, userAgent))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -142,25 +142,4 @@ func Run(ctx context.Context, opts Options) (results []Result, warnings []string
 	}
 
 	return ck.Results(), warnings, nil
-}
-
-// fetchOverHTTP returns a function that downloads a .repo file over HTTP(S).
-func fetchOverHTTP(ctx context.Context, timeout time.Duration) func(string) ([]byte, error) {
-	client := &http.Client{Timeout: timeout}
-	return func(rawURL string) ([]byte, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("User-Agent", userAgent)
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("HTTP %s", resp.Status)
-		}
-		return io.ReadAll(resp.Body)
-	}
 }
