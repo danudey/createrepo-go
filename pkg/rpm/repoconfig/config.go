@@ -10,12 +10,9 @@
 package repoconfig
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
+
+	"github.com/danudey/createrepo-go/pkg/configfile"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
 )
@@ -63,32 +60,10 @@ type Config struct {
 // config file yields (nil, nil) so callers can treat it as "no recorded
 // defaults".
 func Load(ctx context.Context, be backend.Backend) (*Config, error) {
-	rc, err := be.Get(ctx, Path)
-	if errors.Is(err, backend.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer rc.Close()
-
-	data, err := io.ReadAll(rc)
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", Path, err)
-	}
-	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", Path, err)
-	}
-	return &cfg, nil
+	return configfile.Load[Config](ctx, be, Path)
 }
 
 // Save writes cfg to the backend as pretty-printed JSON.
 func Save(ctx context.Context, be backend.Backend, cfg *Config) error {
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	return be.Put(ctx, Path, bytes.NewReader(data), int64(len(data)))
+	return configfile.Save(ctx, be, Path, cfg)
 }
