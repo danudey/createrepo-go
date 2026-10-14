@@ -43,7 +43,8 @@ linters:
         - (*compress/gzip.Reader).Close
         - (*github.com/klauspost/compress/zstd.Decoder).Close
         - (*golang.org/x/crypto/ssh.Session).Close
-        - (*github.com/danudey/createrepo-go/pkg/repo.Repo).Close
+        - (*github.com/danudey/createrepo-go/pkg/rpm/repo.Repo).Close
+        - (*github.com/danudey/createrepo-go/pkg/apt/repo.Repo).Close
         # Writes to a command's own stdout/stderr. If the terminal has gone
         # away there is nothing useful left to report the failure to.
         - fmt.Fprint
@@ -94,9 +95,17 @@ linters:
       # context parameter on most of pkg/rpm/sign's exported API for no gain.
       - linters: [noctx]
         text: "os/exec.Command must not be called"
+      # MD5 and SHA1 are not used as cryptography here: an apt Release file
+      # carries an MD5Sum block for pre-1.0 clients and may carry a SHA1 one,
+      # and a .dsc records its tarballs' MD5 and SHA1. Refusing to compute them
+      # would mean writing a repository those clients cannot read. SHA256 is
+      # always written alongside, and is the only digest this tool trusts.
+      - path: pkg/apt/aptdata/hash\.go
+        linters: [gosec]
+        text: "(G401|G501|G505)"
       # Test files legitimately do things production code should not.
       - path: _test\.go
-        linters: [errcheck, gosec, goconst, dupl, unparam]
+        linters: [errcheck, gosec, goconst, dupl, unparam, contextcheck]
       # The e2e suite drives the built binary and shells out; same reasoning.
       - path: ^test/e2e/
         linters: [errcheck, gosec, noctx]

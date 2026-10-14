@@ -10,9 +10,10 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.25
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.104.1
 	github.com/aws/smithy-go v1.27.1
-	github.com/klauspost/compress v1.18.7
+	github.com/klauspost/compress v1.20.0
 	github.com/pkg/sftp v1.13.10
 	github.com/spf13/cobra v1.10.2
+	github.com/ulikunitz/xz v0.5.17
 	github.com/vbauerster/mpb/v8 v8.16.1
 	golang.org/x/crypto v0.57.0
 	golang.org/x/term v0.46.0
