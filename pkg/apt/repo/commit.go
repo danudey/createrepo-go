@@ -2,13 +2,14 @@ package repo
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/danudey/createrepo-go/pkg/publish"
 
 	"github.com/danudey/createrepo-go/pkg/xfer"
 
@@ -19,25 +20,15 @@ import (
 // ReasonCopied is the UploadAction reason recorded for a file the copy command
 // already transferred directly, outside the staged-upload path. Callers that
 // report a plan can recognize it to avoid listing those packages twice.
-const ReasonCopied = "copied from the source repository"
+const ReasonCopied = publish.ReasonCopied
 
 // UploadAction describes what will happen (or happened) to one package file.
-type UploadAction struct {
-	Location string // destination path, relative to the repository root
-	Local    string // source path
-	Size     int64
-	Upload   bool   // true if the file is/was transferred
-	Reason   string // human-readable explanation
-}
+type UploadAction = publish.UploadAction
 
 // CopyAction describes a server-side relocation: an identical copy already
 // present in the repository at From is duplicated to To (instead of
 // re-uploading it), and From is removed during garbage collection.
-type CopyAction struct {
-	From string
-	To   string
-	Size int64
-}
+type CopyAction = publish.CopyAction
 
 // Plan summarizes a commit: the metadata that will be written and the set of
 // file transfers, relocations, skips and deletions.
@@ -240,18 +231,13 @@ func (r *Repo) computeCleanups(ctx context.Context, plan *Plan, meta *metadataSe
 
 	if r.opt.RemoveUnreferencedPackages {
 		referenced := r.idx.Locations()
-		objs, err := lister.List(ctx, aptdata.PoolDir+"/")
+		keep := func(p string) bool { _, ok := referenced[p]; return ok }
+		var err error
+		// Orphans already scheduled for deletion are not listed twice.
+		plan.UnreferencedFiles, err = publish.Unreferenced(ctx, lister, aptdata.PoolDir+"/", keep, plan.DeletedFiles)
 		if err != nil {
 			return fmt.Errorf("list pool: %w", err)
 		}
-		deleting := toSet(plan.DeletedFiles) // orphans already scheduled
-		for _, o := range objs {
-			if _, isReferenced := referenced[o.Path]; isReferenced || deleting[o.Path] {
-				continue
-			}
-			plan.UnreferencedFiles = append(plan.UnreferencedFiles, o.Path)
-		}
-		sort.Strings(plan.UnreferencedFiles)
 	}
 
 	if r.opt.RemoveStaleMetadata {
@@ -264,153 +250,43 @@ func (r *Repo) computeCleanups(ctx context.Context, plan *Plan, meta *metadataSe
 		for dest := range meta.files {
 			keep[dest] = true
 		}
-		obsolete := toSet(plan.ObsoleteMeta) // deleted anyway; avoid double-listing
-		objs, err := lister.List(ctx, aptdata.SuiteDir(suite)+"/")
+		var err error
+		// Superseded metadata is deleted anyway, so it is not listed twice.
+		plan.StaleMetadata, err = publish.Unreferenced(ctx, lister, aptdata.SuiteDir(suite)+"/", func(p string) bool { return keep[p] }, plan.ObsoleteMeta)
 		if err != nil {
 			return fmt.Errorf("list %s: %w", aptdata.SuiteDir(suite), err)
 		}
-		for _, o := range objs {
-			if keep[o.Path] || obsolete[o.Path] {
-				continue
-			}
-			plan.StaleMetadata = append(plan.StaleMetadata, o.Path)
-		}
-		sort.Strings(plan.StaleMetadata)
 	}
 	return nil
 }
 
-func toSet(items []string) map[string]bool {
-	s := make(map[string]bool, len(items))
-	for _, it := range items {
-		s[it] = true
-	}
-	return s
-}
-
 // buildPlan decides, for each staged file, whether it must be uploaded,
 // relocated from an existing copy, or skipped, and which now-unreferenced files
-// must be garbage-collected. It uses remote validation (RemoteHasher / size) to
-// avoid re-uploading files that are already present, and never downloads one.
+// must be garbage-collected (see publish.PlanFiles).
 func (r *Repo) buildPlan(ctx context.Context) (*Plan, error) {
-	plan := &Plan{Packages: r.idx.Len(), Sources: r.idx.SourceLen()}
-
-	// Locations the freshly-generated indexes reference, and the size and
-	// checksum each is expected to have.
-	referenced := r.fileExpectations()
-
-	// orphans: files referenced by the indexes as loaded but no longer
-	// referenced now. They are garbage-collected after the Release swap; an
-	// orphan whose content matches a staged upload can serve as the source of a
-	// server-side relocation instead of a re-upload.
-	orphans := map[string]string{} // path -> original entry id
-	orphanByID := map[string]string{}
-	for p, id := range r.original {
-		if _, stillReferenced := referenced[p]; stillReferenced {
-			continue
-		}
-		orphans[p] = id
-		if _, ok := orphanByID[id]; !ok {
-			orphanByID[id] = p
-		}
+	referenced := map[string]publish.Expect{}
+	for p, want := range r.fileExpectations() {
+		referenced[p] = publish.Expect{Size: want.size, SHA256: want.hashes[aptdata.HashSHA256], ID: want.id}
 	}
-
-	_, canCopy := r.be.(backend.Copier)
-	hasher, _ := r.be.(backend.RemoteHasher)
-
-	// Deterministic order for staged uploads.
-	dests := make([]string, 0, len(r.pending))
-	for dest := range r.pending {
-		dests = append(dests, dest)
+	files, err := publish.PlanFiles(ctx, r.be, publish.State{
+		Referenced: referenced,
+		Original:   r.original,
+		Pending:    r.pending,
+		Copied:     r.copied,
+		Force:      r.opt.Force,
+	})
+	if err != nil {
+		return nil, err
 	}
-	sort.Strings(dests)
-
-	for _, dest := range dests {
-		local := r.pending[dest]
-		want := referenced[dest]
-		action := UploadAction{Location: dest, Local: local, Size: want.size}
-
-		fi, err := r.be.Stat(ctx, dest)
-		missing := false
-		switch {
-		case errors.Is(err, backend.ErrNotExist):
-			missing = true
-			action.Upload = true
-			action.Reason = "not present"
-		case err != nil:
-			return nil, fmt.Errorf("stat %s: %w", dest, err)
-		default:
-			action.Upload, action.Reason, err = r.resolveExisting(ctx, dest, want, fi, hasher)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		// If the file is missing but an identical copy already exists in the
-		// repository at a now-unreferenced location, relocate it server-side
-		// instead of re-uploading. --force always re-uploads from local (it
-		// deliberately does not trust the remote copy).
-		if missing && !r.opt.Force && canCopy && want.id != "" {
-			if from, ok := orphanByID[want.id]; ok {
-				plan.Copies = append(plan.Copies, CopyAction{From: from, To: dest, Size: want.size})
-				continue
-			}
-		}
-
-		if action.Upload {
-			plan.Uploads = append(plan.Uploads, action)
-			plan.BytesToUpload += action.Size
-		} else {
-			plan.Skipped = append(plan.Skipped, action)
-		}
-	}
-
-	// Relocated existing files: referenced by the new indexes, not staged as a
-	// local upload, and at a location the loaded indexes did not have (their
-	// location changed, e.g. rebuild --pool-layout). Their content already
-	// lives in the repository at a now-orphaned location, so move it
-	// server-side instead of re-uploading. This pass is a no-op for
-	// add/remove/create, where every referenced location is either pending or
-	// unchanged.
-	for _, dest := range sortedMapKeys(referenced) {
-		want := referenced[dest]
-		if _, isPending := r.pending[dest]; isPending {
-			continue
-		}
-		if _, wasOriginal := r.original[dest]; wasOriginal {
-			continue
-		}
-		// Already transferred out of band by the copy command (or, under
-		// --dry-run, accounted for as if it had been).
-		if size, wasCopied := r.copied[dest]; wasCopied {
-			plan.Skipped = append(plan.Skipped, UploadAction{Location: dest, Size: size, Reason: ReasonCopied})
-			continue
-		}
-		// A new location for existing content. If it is already present (e.g. a
-		// resumed rebuild), trust it; otherwise relocate from the orphan copy.
-		if _, err := r.be.Stat(ctx, dest); err == nil {
-			plan.Skipped = append(plan.Skipped, UploadAction{Location: dest, Size: want.size, Reason: "present at new location"})
-			continue
-		} else if !errors.Is(err, backend.ErrNotExist) {
-			return nil, fmt.Errorf("stat %s: %w", dest, err)
-		}
-		if canCopy {
-			if from, ok := orphanByID[want.id]; ok {
-				plan.Copies = append(plan.Copies, CopyAction{From: from, To: dest, Size: want.size})
-				continue
-			}
-		}
-		return nil, fmt.Errorf("cannot place %s: no local copy staged and the backend cannot move it server-side", dest)
-	}
-
-	// Everything still unreferenced is garbage. A relocation source is included
-	// here too: its copy is written before the Release swap, and the source is
-	// removed afterwards.
-	for p := range orphans {
-		plan.DeletedFiles = append(plan.DeletedFiles, p)
-	}
-	sort.Strings(plan.DeletedFiles)
-	return plan, nil
+	return &Plan{
+		Packages:      r.idx.Len(),
+		Sources:       r.idx.SourceLen(),
+		Uploads:       files.Uploads,
+		Skipped:       files.Skipped,
+		Copies:        files.Copies,
+		DeletedFiles:  files.Deleted,
+		BytesToUpload: files.BytesToUpload,
+	}, nil
 }
 
 // fileExpectation is what the new indexes say about one published file.
@@ -447,34 +323,6 @@ func (r *Repo) fileExpectations() map[string]fileExpectation {
 		}
 	}
 	return out
-}
-
-// resolveExisting decides whether an already-present file must be re-uploaded.
-func (r *Repo) resolveExisting(ctx context.Context, dest string, want fileExpectation, fi *backend.FileInfo, hasher backend.RemoteHasher) (upload bool, reason string, err error) {
-	// --force means "upload regardless": overwrite the remote file even if it
-	// looks identical. This is the only correct behavior when we cannot prove
-	// the remote file matches.
-	if r.opt.Force {
-		return true, "overwriting (--force)", nil
-	}
-	expect := want.hashes[aptdata.HashSHA256]
-	if hasher != nil && expect != "" {
-		sum, ok, herr := hasher.Hash(ctx, dest, backend.AlgoSHA256)
-		if herr != nil && !errors.Is(herr, backend.ErrNotExist) {
-			return false, "", fmt.Errorf("remote hash %s: %w", dest, herr)
-		}
-		if ok {
-			if strings.EqualFold(sum, expect) {
-				return false, "present, checksum verified remotely", nil
-			}
-			return false, "", fmt.Errorf("%s already exists with different content (checksum %s != %s); use --force to overwrite", dest, sum, expect)
-		}
-	}
-	// Fall back to a size comparison when no checksum is available.
-	if want.size == 0 || fi.Size == want.size {
-		return false, "present, size matches (checksum not verified)", nil
-	}
-	return false, "", fmt.Errorf("%s already exists with different size (%d != %d); use --force to overwrite", dest, fi.Size, want.size)
 }
 
 // indexDoc is one generated index before compression.

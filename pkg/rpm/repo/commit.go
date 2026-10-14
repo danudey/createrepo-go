@@ -2,11 +2,12 @@ package repo
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path"
 	"sort"
+
+	"github.com/danudey/createrepo-go/pkg/publish"
 
 	"github.com/danudey/createrepo-go/pkg/xfer"
 
@@ -17,25 +18,15 @@ import (
 // ReasonCopied is the UploadAction reason recorded for an RPM the copy command
 // already transferred directly, outside the staged-upload path. Callers that
 // report a plan can recognize it to avoid listing those packages twice.
-const ReasonCopied = "copied from the source repository"
+const ReasonCopied = publish.ReasonCopied
 
 // UploadAction describes what will happen (or happened) to one RPM.
-type UploadAction struct {
-	Location string // destination href
-	Local    string // source path
-	Size     int64
-	Upload   bool   // true if the file is/was transferred
-	Reason   string // human-readable explanation
-}
+type UploadAction = publish.UploadAction
 
 // CopyAction describes a server-side relocation of an RPM: an identical copy
 // already present in the repository at From is duplicated to To (instead of
 // re-uploading it), and From is removed during garbage collection.
-type CopyAction struct {
-	From string
-	To   string
-	Size int64
-}
+type CopyAction = publish.CopyAction
 
 // Plan summarizes a commit: the metadata that will be written and the set of
 // RPM transfers, relocations, skips and deletions.
@@ -188,18 +179,13 @@ func (r *Repo) computeCleanups(ctx context.Context, plan *Plan, meta *metadataSe
 		for _, p := range r.idx.Packages() {
 			referenced[p.Location] = true
 		}
-		objs, err := lister.List(ctx, "")
+		keep := func(p string) bool { return !isRPM(p) || referenced[p] }
+		var err error
+		// Orphans already scheduled for deletion are not listed twice.
+		plan.UnreferencedRPMs, err = publish.Unreferenced(ctx, lister, "", keep, plan.DeletedRPMs)
 		if err != nil {
 			return fmt.Errorf("list repository: %w", err)
 		}
-		deleting := toSet(plan.DeletedRPMs) // orphans already scheduled
-		for _, o := range objs {
-			if !isRPM(o.Path) || referenced[o.Path] || deleting[o.Path] {
-				continue
-			}
-			plan.UnreferencedRPMs = append(plan.UnreferencedRPMs, o.Path)
-		}
-		sort.Strings(plan.UnreferencedRPMs)
 	}
 
 	if r.opt.RemoveStaleMetadata {
@@ -207,189 +193,50 @@ func (r *Repo) computeCleanups(ctx context.Context, plan *Plan, meta *metadataSe
 		for href := range meta.files {
 			keep[href] = true
 		}
-		obsolete := toSet(plan.ObsoleteMeta) // deleted anyway; avoid double-listing
-		objs, err := lister.List(ctx, "repodata/")
+		var err error
+		// Superseded metadata is deleted anyway, so it is not listed twice.
+		plan.StaleMetadata, err = publish.Unreferenced(ctx, lister, "repodata/", func(p string) bool { return keep[p] }, plan.ObsoleteMeta)
 		if err != nil {
 			return fmt.Errorf("list repodata: %w", err)
 		}
-		for _, o := range objs {
-			if keep[o.Path] || obsolete[o.Path] {
-				continue
-			}
-			plan.StaleMetadata = append(plan.StaleMetadata, o.Path)
-		}
-		sort.Strings(plan.StaleMetadata)
 	}
 	return nil
 }
 
-func toSet(items []string) map[string]bool {
-	s := make(map[string]bool, len(items))
-	for _, it := range items {
-		s[it] = true
-	}
-	return s
-}
-
 // buildPlan decides, for each staged RPM, whether it must be uploaded,
 // relocated from an existing copy, or skipped, and which now-unreferenced files
-// must be garbage-collected. It uses remote validation (RemoteHasher / size) to
-// avoid re-uploading files that are already present and never downloads an RPM.
+// must be garbage-collected (see publish.PlanFiles).
 func (r *Repo) buildPlan(ctx context.Context, pkgs []*repodata.Package) (*Plan, error) {
-	plan := &Plan{Packages: len(pkgs)}
-
-	// Locations the freshly-generated metadata references.
-	referenced := make(map[string]bool, len(pkgs))
+	referenced := make(map[string]publish.Expect, len(pkgs))
 	for _, p := range pkgs {
-		referenced[p.Location] = true
-	}
-
-	// orphans: files referenced by the metadata as loaded but no longer
-	// referenced now. They are garbage-collected after the metadata swap; an
-	// orphan whose content (pkgid) matches a staged upload can serve as the
-	// source of a server-side relocation instead of re-uploading.
-	orphans := map[string]string{} // href -> original pkgid
-	orphanByPkgID := map[string]string{}
-	for href, id := range r.original {
-		if referenced[href] {
-			continue
-		}
-		orphans[href] = id
-		if _, ok := orphanByPkgID[id]; !ok {
-			orphanByPkgID[id] = href
+		referenced[p.Location] = publish.Expect{
+			Size: p.SizePackage, SHA256: sha256Only(p.PkgID, p.ChecksumType), ID: p.PkgID,
 		}
 	}
-
-	_, canCopy := r.be.(backend.Copier)
-
-	// Deterministic order for staged uploads.
-	hrefs := make([]string, 0, len(r.pending))
-	for href := range r.pending {
-		hrefs = append(hrefs, href)
-	}
-	sort.Strings(hrefs)
-
-	hasher, _ := r.be.(backend.RemoteHasher)
-	for _, href := range hrefs {
-		local := r.pending[href]
-		pkg := r.idx.ByLocation(href)
-		action := UploadAction{Location: href, Local: local}
-		if pkg != nil {
-			action.Size = pkg.SizePackage
-		}
-
-		fi, err := r.be.Stat(ctx, href)
-		missing := false
-		switch {
-		case errors.Is(err, backend.ErrNotExist):
-			missing = true
-			action.Upload = true
-			action.Reason = "not present"
-		case err != nil:
-			return nil, fmt.Errorf("stat %s: %w", href, err)
-		default:
-			action.Upload, action.Reason, err = r.resolveExisting(ctx, href, pkg, fi, hasher)
-			if err != nil {
-				return nil, err
+	files, err := publish.PlanFiles(ctx, r.be, publish.State{
+		Referenced: referenced,
+		Original:   r.original,
+		Pending:    r.pending,
+		Copied:     r.copied,
+		Force:      r.opt.Force,
+		Describe: func(href string) string {
+			if p := r.idx.ByLocation(href); p != nil {
+				return p.NEVRA() + " at " + href
 			}
-		}
-
-		// If the file is missing but an identical copy already exists in the
-		// repository at a now-unreferenced location, relocate it server-side
-		// instead of re-uploading. --force always re-uploads from local (it
-		// deliberately does not trust the remote copy).
-		if missing && !r.opt.Force && canCopy && pkg != nil {
-			if from, ok := orphanByPkgID[pkg.PkgID]; ok {
-				plan.Copies = append(plan.Copies, CopyAction{From: from, To: href, Size: action.Size})
-				continue
-			}
-		}
-
-		if action.Upload {
-			plan.Uploads = append(plan.Uploads, action)
-			plan.BytesToUpload += action.Size
-		} else {
-			plan.Skipped = append(plan.Skipped, action)
-		}
+			return href
+		},
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	// Relocated existing packages: referenced by the new metadata, not staged as
-	// a local upload, and at a location the loaded metadata did not have (their
-	// location changed, e.g. rebuild --location-prefix). Their content already
-	// lives in the repository at a now-orphaned location with the same pkgid, so
-	// move it server-side instead of re-uploading. This pass is a no-op for
-	// add/remove/create, where every referenced location is either pending or
-	// unchanged (still in r.original).
-	for _, p := range pkgs {
-		if _, isPending := r.pending[p.Location]; isPending {
-			continue
-		}
-		if _, wasOriginal := r.original[p.Location]; wasOriginal {
-			continue
-		}
-		// Already transferred out of band by the copy command (or, under
-		// --dry-run, accounted for as if it had been).
-		if size, wasCopied := r.copied[p.Location]; wasCopied {
-			plan.Skipped = append(plan.Skipped, UploadAction{Location: p.Location, Size: size, Reason: ReasonCopied})
-			continue
-		}
-		// A new location for existing content. If it is already present (e.g. a
-		// resumed rebuild), trust it; otherwise relocate from the orphan copy.
-		if _, err := r.be.Stat(ctx, p.Location); err == nil {
-			plan.Skipped = append(plan.Skipped, UploadAction{Location: p.Location, Size: p.SizePackage, Reason: "present at new location"})
-			continue
-		} else if !errors.Is(err, backend.ErrNotExist) {
-			return nil, fmt.Errorf("stat %s: %w", p.Location, err)
-		}
-		if canCopy {
-			if from, ok := orphanByPkgID[p.PkgID]; ok {
-				plan.Copies = append(plan.Copies, CopyAction{From: from, To: p.Location, Size: p.SizePackage})
-				continue
-			}
-		}
-		return nil, fmt.Errorf("cannot relocate %s to %s: no local copy staged and backend cannot move it server-side", p.NEVRA(), p.Location)
-	}
-
-	// Everything still unreferenced is garbage. A relocation source is included
-	// here too: its copy is written before the metadata swap, and the source is
-	// removed afterwards.
-	for href := range orphans {
-		plan.DeletedRPMs = append(plan.DeletedRPMs, href)
-	}
-	sort.Strings(plan.DeletedRPMs)
-	return plan, nil
-}
-
-// resolveExisting decides whether an already-present file must be re-uploaded.
-func (r *Repo) resolveExisting(ctx context.Context, href string, pkg *repodata.Package, fi *backend.FileInfo, hasher backend.RemoteHasher) (upload bool, reason string, err error) {
-	// --force means "upload regardless": overwrite the remote file even if it
-	// looks identical. This is the only correct behavior when we cannot prove
-	// the remote file matches, or when the local file will differ once written
-	// (e.g. it was just signed).
-	if r.opt.Force {
-		return true, "overwriting (--force)", nil
-	}
-	if pkg == nil {
-		// Shouldn't happen: a pending href always maps to an indexed package.
-		return true, "no package metadata", nil
-	}
-	if hasher != nil {
-		sum, ok, herr := hasher.Hash(ctx, href, r.opt.checksumType())
-		if herr != nil && !errors.Is(herr, backend.ErrNotExist) {
-			return false, "", fmt.Errorf("remote hash %s: %w", href, herr)
-		}
-		if ok {
-			if sum == pkg.PkgID {
-				return false, "present, checksum verified remotely", nil
-			}
-			return false, "", fmt.Errorf("%s already exists with different content (checksum %s != %s); use --force to overwrite", href, sum, pkg.PkgID)
-		}
-	}
-	// Fall back to a size comparison when no checksum is available.
-	if fi.Size == pkg.SizePackage {
-		return false, "present, size matches (checksum not verified)", nil
-	}
-	return false, "", fmt.Errorf("%s already exists with different size (%d != %d); use --force to overwrite", href, fi.Size, pkg.SizePackage)
+	return &Plan{
+		Packages:      len(pkgs),
+		Uploads:       files.Uploads,
+		Skipped:       files.Skipped,
+		Copies:        files.Copies,
+		DeletedRPMs:   files.Deleted,
+		BytesToUpload: files.BytesToUpload,
+	}, nil
 }
 
 // generateMetadata renders and compresses primary/filelists/other and builds
