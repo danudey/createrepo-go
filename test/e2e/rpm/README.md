@@ -54,7 +54,7 @@ release's rpm accepts the signature format its profile selects.
 ## Running
 
 ```sh
-go test -tags e2e ./test/e2e/...
+go test -tags e2e ./test/e2e/rpm/...
 ```
 
 The `e2e` build tag keeps these tests out of the default `go test ./...` run
@@ -64,13 +64,13 @@ Useful invocations:
 
 ```sh
 # One backend only.
-go test -tags e2e ./test/e2e/ -run 'TestE2E/s3-minio' -v
+go test -tags e2e ./test/e2e/rpm/ -run 'TestE2E/s3-minio' -v
 
 # One scenario across all backends.
-go test -tags e2e ./test/e2e/ -run 'TestE2E/.*/repeated_update_stress' -v
+go test -tags e2e ./test/e2e/rpm/ -run 'TestE2E/.*/repeated_update_stress' -v
 
 # Verbose, with a longer timeout (the GCS container pull can be slow first time).
-go test -tags e2e ./test/e2e/ -v -timeout 600s
+go test -tags e2e ./test/e2e/rpm/ -v -timeout 600s
 ```
 
 ## Optional dependencies

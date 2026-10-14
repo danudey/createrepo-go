@@ -34,7 +34,8 @@ name: Release
 #     ./tool-v1.2.3-linux-amd64.tar.gz
 #
 # WHAT TO CHANGE
-#   1. `BINARY_NAME` and `MAIN_PACKAGE` below. These are the two that matter.
+#   1. The `binary` list in the build matrix. Each entry is a directory under
+#      cmd/ holding a func main, and is released as an archive of that name.
 #   2. `WORKING_DIRECTORY`, if go.mod is not at the repository root.
 #   3. `VERSION_VAR`, if the binary reports its own version. It is the fully
 #      qualified name of a package-level string variable, e.g.
@@ -70,16 +71,13 @@ permissions:
 env:
   WORKING_DIRECTORY: "."
   GO_VERSION: "stable"
-  # The name the binary is installed as, and the stem of every archive.
-  BINARY_NAME: "createrepo-go"
-  # The package containing func main, relative to WORKING_DIRECTORY.
-  MAIN_PACKAGE: "./cmd/createrepo-go"
   # Package-level string to stamp the version into. Empty to skip.
-  # cmd/createrepo-go/root.go: `var version = "dev"`.
+  # cmd/<binary>/root.go: `var version = "dev"`.
   VERSION_VAR: "main.version"
   # Files copied into every archive alongside the binary. Space-separated.
+  # The binary's own page, docs/<binary>.md, is added as well (as README.md).
   # Add LICENSE here once the repository has one.
-  EXTRA_FILES: "README.md"
+  EXTRA_FILES: ""
 
 jobs:
   # Keeps a release pull request up to date with every conventional commit
@@ -101,7 +99,7 @@ jobs:
           manifest-file: .release-please-manifest.json
 
   build:
-    name: build (${{ matrix.goos }}/${{ matrix.goarch }})
+    name: build (${{ matrix.binary }}, ${{ matrix.target }})
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
     # Everything cross-compiles from one Linux runner. Go needs no per-target
@@ -120,19 +118,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { goos: linux, goarch: amd64 }
-          - { goos: linux, goarch: arm64 }
-          - { goos: linux, goarch: arm, goarm: "7" }
-          - { goos: linux, goarch: riscv64 }
-          - { goos: linux, goarch: ppc64le }
-          - { goos: linux, goarch: s390x }
-          - { goos: darwin, goarch: amd64 }
-          - { goos: darwin, goarch: arm64 }
-          - { goos: windows, goarch: amd64 }
-          - { goos: windows, goarch: arm64 }
-          - { goos: freebsd, goarch: amd64 }
-          - { goos: freebsd, goarch: arm64 }
+        # Both binaries are built from the same module and released under the
+        # same tag. Each target is GOOS/GOARCH[/GOARM]: a single axis, so it
+        # multiplies cleanly against the binary list (an `include` list would
+        # not).
+        binary: [createrepo-go, createapt-go]
+        target:
+          - linux/amd64
+          - linux/arm64
+          - linux/arm/7
+          - linux/riscv64
+          - linux/ppc64le
+          - linux/s390x
+          - darwin/amd64
+          - darwin/arm64
+          - windows/amd64
+          - windows/arm64
+          - freebsd/amd64
+          - freebsd/arm64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -141,12 +144,27 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: ${{ env.WORKING_DIRECTORY }}/go.sum
 
+      - name: Resolve the target
+        id: target
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          IFS=/ read -r goos goarch goarm <<<"$TARGET"
+          {
+            echo "goos=${goos}"
+            echo "goarch=${goarch}"
+            echo "goarm=${goarm:-}"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build
         working-directory: ${{ env.WORKING_DIRECTORY }}
         env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          GOARM: ${{ matrix.goarm }}
+          BINARY_NAME: ${{ matrix.binary }}
+          MAIN_PACKAGE: ./cmd/${{ matrix.binary }}
+          GOOS: ${{ steps.target.outputs.goos }}
+          GOARCH: ${{ steps.target.outputs.goarch }}
+          GOARM: ${{ steps.target.outputs.goarm }}
           # A static binary. It is what makes one Linux artifact run on any
           # distribution, and what makes these targets cross-buildable at all.
           CGO_ENABLED: "0"
@@ -174,18 +192,22 @@ jobs:
         id: package
         working-directory: ${{ env.WORKING_DIRECTORY }}
         env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+          BINARY_NAME: ${{ matrix.binary }}
+          GOOS: ${{ steps.target.outputs.goos }}
+          GOARCH: ${{ steps.target.outputs.goarch }}
+          GOARM: ${{ steps.target.outputs.goarm }}
           TAG: ${{ needs.release-please.outputs.tag_name }}
         run: |
           set -euo pipefail
           name="${BINARY_NAME}-${TAG}-${GOOS}-${GOARCH}"
+          [ -n "${GOARM}" ] && name="${name}v${GOARM}"
           mkdir -p "staging/${name}"
           if [ "$GOOS" = "windows" ]; then
             cp "dist/${BINARY_NAME}.exe" "staging/${name}/"
           else
             cp "dist/${BINARY_NAME}" "staging/${name}/"
           fi
+          cp "docs/${BINARY_NAME}.md" "staging/${name}/README.md"
           # Unquoted on purpose: EXTRA_FILES is a space-separated list.
           # shellcheck disable=SC2086
           [ -n "${EXTRA_FILES}" ] && cp ${EXTRA_FILES} "staging/${name}/"

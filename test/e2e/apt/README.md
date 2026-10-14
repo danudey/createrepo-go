@@ -7,9 +7,9 @@ is correct, and nothing short of pointing it at a generated repository proves
 it.
 
 ```sh
-make test-e2e
+make test-e2e-apt
 # or
-go test -tags e2e ./test/e2e/... -timeout 600s
+go test -tags e2e ./test/e2e/apt/... -timeout 600s
 ```
 
 They are behind the `e2e` build tag, so `go test ./...` does not run them.
