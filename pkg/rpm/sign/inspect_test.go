@@ -72,7 +72,7 @@ func TestVerifyDetachedAndExportPublicKey(t *testing.T) {
 	t.Setenv("GNUPGHOME", home)
 
 	data := []byte("<repomd>example</repomd>")
-	sig, err := NewKeyIDSigner(keyID).SignDetached(data)
+	sig, err := NewKeyIDSigner(keyID, "").SignDetached(data)
 	if err != nil {
 		t.Fatal(err)
 	}

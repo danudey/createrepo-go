@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"sort"
 	"strings"
+
+	"github.com/danudey/createrepo-go/pkg/gpg"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
@@ -195,7 +196,7 @@ const gpgRecordFpr = "fpr"
 // in the local keyring the identifier itself is all we can offer.
 func KeyAndSubkeyIDs(keyID string) []string {
 	self := longKeyID(keyID)
-	cmd := exec.Command(gpgBinary(), "--batch", "--with-colons", "--list-keys", keyID)
+	cmd := gpg.Command("--with-colons", "--list-keys", keyID)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
@@ -230,28 +231,7 @@ func longKeyID(s string) string {
 // the public keys in the given keyring files. It returns the fingerprint of the
 // key that made the signature.
 func VerifyDetached(data, armoredSig []byte, keyringPaths []string) (string, error) {
-	if len(keyringPaths) == 0 {
-		return "", fmt.Errorf("no keyring supplied to verify the signature against")
-	}
-	var ring openpgp.EntityList
-	for _, p := range keyringPaths {
-		el, err := ReadKeyRingFile(p)
-		if err != nil {
-			return "", fmt.Errorf("read keyring %s: %w", p, err)
-		}
-		ring = append(ring, el...)
-	}
-	if len(ring) == 0 {
-		return "", fmt.Errorf("no OpenPGP keys found in the supplied keyring(s)")
-	}
-	signer, err := openpgp.CheckArmoredDetachedSignature(ring, bytes.NewReader(data), bytes.NewReader(armoredSig), nil)
-	if err != nil {
-		return "", err
-	}
-	if signer == nil || signer.PrimaryKey == nil {
-		return "", fmt.Errorf("signature verified but the signing key could not be identified")
-	}
-	return fmt.Sprintf("%X", signer.PrimaryKey.Fingerprint), nil
+	return gpg.VerifyDetached(data, armoredSig, keyringPaths)
 }
 
 // ReadKeyRingFile reads OpenPGP entities from a key file, accepting either
@@ -261,10 +241,7 @@ func ReadKeyRingFile(path string) (openpgp.EntityList, error) {
 	if err != nil {
 		return nil, err
 	}
-	if el, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(data)); err == nil {
-		return el, nil
-	}
-	return openpgp.ReadKeyRing(bytes.NewReader(data))
+	return gpg.ReadKeyRing(data)
 }
 
 // ExportPublicKey writes the public half of a key from the local GnuPG keyring
@@ -273,32 +250,5 @@ func ReadKeyRingFile(path string) (openpgp.EntityList, error) {
 // gets turned into something rpmkeys and OpenPGP verification can use. A key
 // that is not in the local keyring yields an error.
 func ExportPublicKey(keyID string) (path string, cleanup func(), err error) {
-	noop := func() {}
-	if keyID == "" {
-		return "", noop, fmt.Errorf("no key id given")
-	}
-	cmd := exec.Command(gpgBinary(), "--batch", "--armor", "--export", keyID)
-	var out, errBuf bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &errBuf
-	if err := cmd.Run(); err != nil {
-		return "", noop, fmt.Errorf("gpg --export %s: %w: %s", keyID, err, strings.TrimSpace(errBuf.String()))
-	}
-	if out.Len() == 0 {
-		return "", noop, fmt.Errorf("key %s is not in the local GnuPG keyring", keyID)
-	}
-	f, err := os.CreateTemp("", "cr-pubkey-*.asc")
-	if err != nil {
-		return "", noop, err
-	}
-	if _, err := io.Copy(f, &out); err != nil {
-		f.Close()
-		os.Remove(f.Name())
-		return "", noop, err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(f.Name())
-		return "", noop, err
-	}
-	return f.Name(), func() { os.Remove(f.Name()) }, nil
+	return gpg.ExportPublicKeyToFile(keyID)
 }

@@ -71,7 +71,7 @@ func TestMetadataSignKeyFileAndKeyID(t *testing.T) {
 	}
 	for name, s := range map[string]*MetadataSigner{
 		"keyfile": fileSigner,
-		"keyid":   NewKeyIDSigner(keyID),
+		"keyid":   NewKeyIDSigner(keyID, ""),
 	} {
 		sig, err := s.SignDetached(data)
 		if err != nil {

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danudey/createrepo-go/pkg/gpg"
+
 	"github.com/spf13/cobra"
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
@@ -212,7 +214,7 @@ func preRunE(cmd *cobra.Command, args []string) error {
 	setupProgress(cmd)
 	applyAWSEnv()
 	backend.InsecureIgnoreHostKey = gf.insecureIgnoreHostKey
-	sign.NoPassphrasePrompt = gf.gpgNoPrompt
+	gpg.NoPassphrasePrompt = gf.gpgNoPrompt
 	return validateSigningFlags()
 }
 

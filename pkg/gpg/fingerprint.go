@@ -1,4 +1,4 @@
-package sign
+package gpg
 
 import (
 	"bytes"
@@ -33,7 +33,7 @@ func fingerprintFromFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	entities, err := readKeyRing(data)
+	entities, err := ReadKeyRing(data)
 	if err != nil {
 		return "", fmt.Errorf("read key %s: %w", path, err)
 	}
@@ -49,7 +49,7 @@ func fingerprintFromFile(path string) (string, error) {
 // keyring. gpg's colon-delimited output is parsed rather than its human
 // output, which is not stable across versions.
 func fingerprintFromKeyring(keyID string) (string, error) {
-	cmd := gpgCommand("--with-colons", "--fingerprint", keyID)
+	cmd := Command("--with-colons", "--fingerprint", keyID)
 	var out, errBuf bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
@@ -79,7 +79,10 @@ func fingerprintFromKeyring(keyID string) (string, error) {
 // keyring. It is what lets a repository publish the key its clients need to
 // install alongside it.
 func ExportPublicKey(keyID string) ([]byte, error) {
-	cmd := gpgCommand("--armor", "--export", keyID)
+	if keyID == "" {
+		return nil, fmt.Errorf("no key id given")
+	}
+	cmd := Command("--armor", "--export", keyID)
 	var out, errBuf bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
@@ -87,7 +90,7 @@ func ExportPublicKey(keyID string) ([]byte, error) {
 		return nil, fmt.Errorf("gpg --export %s: %w: %s", keyID, err, strings.TrimSpace(errBuf.String()))
 	}
 	if out.Len() == 0 {
-		return nil, fmt.Errorf("gpg exported no key for %q", keyID)
+		return nil, fmt.Errorf("key %s is not in the local GnuPG keyring", keyID)
 	}
 	return out.Bytes(), nil
 }

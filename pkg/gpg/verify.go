@@ -1,4 +1,4 @@
-package sign
+package gpg
 
 import (
 	"bytes"
@@ -20,7 +20,7 @@ func LoadKeyring(paths ...string) (openpgp.EntityList, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read keyring %s: %w", p, err)
 		}
-		entities, err := readKeyRing(data)
+		entities, err := ReadKeyRing(data)
 		if err != nil {
 			return nil, fmt.Errorf("parse keyring %s: %w", p, err)
 		}
@@ -32,26 +32,33 @@ func LoadKeyring(paths ...string) (openpgp.EntityList, error) {
 	return all, nil
 }
 
-// VerifyDetached checks an armored detached signature (a Release.gpg) over
-// data, returning the fingerprint of the key that made it.
+// VerifyDetached checks a detached signature (repomd.xml.asc, a Release.gpg)
+// over data against the public keys in the keyring files, returning the
+// fingerprint of the key that made it.
 func VerifyDetached(data, signature []byte, keyrings []string) (string, error) {
+	if len(keyrings) == 0 {
+		return "", fmt.Errorf("no keyring supplied to verify the signature against")
+	}
 	kr, err := LoadKeyring(keyrings...)
 	if err != nil {
 		return "", err
 	}
 	signer, err := openpgp.CheckArmoredDetachedSignature(kr, bytes.NewReader(data), bytes.NewReader(signature), nil)
 	if err != nil {
-		// A binary (unarmored) signature is unusual for a Release.gpg but is
-		// still valid, so it is worth a second attempt before giving up.
+		// A binary (unarmored) signature is unusual but still valid, so it is
+		// worth a second attempt before giving up.
 		signer, err = openpgp.CheckDetachedSignature(kr, bytes.NewReader(data), bytes.NewReader(signature), nil)
 		if err != nil {
 			return "", err
 		}
 	}
-	return fingerprintOf(signer), nil
+	if signer == nil || signer.PrimaryKey == nil {
+		return "", fmt.Errorf("signature verified but the signing key could not be identified")
+	}
+	return FingerprintOf(signer), nil
 }
 
-// VerifyClearsigned checks an inline-signed document (an InRelease), returning
+// VerifyClearsigned checks an inline-signed document (an apt InRelease), returning
 // the signed body and the fingerprint of the key that made the signature.
 //
 // The body returned is the bytes the signature actually covers, so a caller
@@ -70,11 +77,11 @@ func VerifyClearsigned(document []byte, keyrings []string) (body []byte, fingerp
 	if err != nil {
 		return nil, "", err
 	}
-	return block.Plaintext, fingerprintOf(signer), nil
+	return block.Plaintext, FingerprintOf(signer), nil
 }
 
-// fingerprintOf renders a verified signer's primary-key fingerprint.
-func fingerprintOf(e *openpgp.Entity) string {
+// FingerprintOf renders a verified signer's primary-key fingerprint.
+func FingerprintOf(e *openpgp.Entity) string {
 	if e == nil || e.PrimaryKey == nil {
 		return "an unidentified key"
 	}
@@ -84,14 +91,15 @@ func fingerprintOf(e *openpgp.Entity) string {
 // ExportPublicKeyToFile exports keyID from the local GnuPG keyring into a
 // temporary armored keyring file, returning its path and a cleanup function.
 // It is how a copy verifies a source repository against the key its config
-// records, without the caller having to supply --keyring.
+// records, without the caller having to supply --keyring, and how rpmkeys is
+// given a key to trust.
 func ExportPublicKeyToFile(keyID string) (path string, cleanup func(), err error) {
 	noop := func() {}
 	armored, err := ExportPublicKey(keyID)
 	if err != nil {
 		return "", noop, err
 	}
-	f, err := os.CreateTemp("", "createapt-key-*.asc")
+	f, err := os.CreateTemp("", "gpg-pubkey-*.asc")
 	if err != nil {
 		return "", noop, err
 	}

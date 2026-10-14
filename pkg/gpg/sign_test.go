@@ -1,4 +1,4 @@
-package sign
+package gpg
 
 import (
 	"bytes"
@@ -169,6 +169,7 @@ func fakeGPG(t *testing.T) (record func() (args string, env string)) {
 	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("CREATEREPO_GPG", "")
 	t.Setenv("CREATEAPT_GPG", script)
 	return func() (string, string) {
 		t.Helper()
@@ -255,7 +256,7 @@ func TestPromptingIsAllowedByDefault(t *testing.T) {
 // result natively, which is what proves the two signing paths are
 // interchangeable.
 func TestGPGSignerAgreesWithGPG(t *testing.T) {
-	if _, err := exec.LookPath(GPGBinary()); err != nil {
+	if _, err := exec.LookPath(Binary()); err != nil {
 		t.Skip("gpg is not installed")
 	}
 
@@ -264,7 +265,7 @@ func TestGPGSignerAgreesWithGPG(t *testing.T) {
 	if err := os.Chmod(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	gen := exec.Command(GPGBinary(), "--batch", "--passphrase", "", "--quick-generate-key",
+	gen := exec.Command(Binary(), "--batch", "--passphrase", "", "--quick-generate-key",
 		"createapt test <keyring@example.invalid>", "rsa3072", "sign", "never")
 	if out, err := gen.CombinedOutput(); err != nil {
 		t.Skipf("could not generate a test key with gpg: %v: %s", err, out)

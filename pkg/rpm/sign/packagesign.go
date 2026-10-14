@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/danudey/createrepo-go/pkg/gpg"
 )
 
 // SignatureFormat selects the rpm signature header layout written when signing.
@@ -69,7 +71,7 @@ func NewPackageSignerKeyFile(keyFile, passphrase string) (*PackageSigner, error)
 	}
 	cleanup := func() { os.RemoveAll(home) }
 
-	imp := exec.Command(gpgBinary(), "--homedir", home, "--batch", "--yes", "--import", keyFile)
+	imp := exec.Command(gpg.Binary(), "--homedir", home, "--batch", "--yes", "--import", keyFile)
 	if out, err := imp.CombinedOutput(); err != nil {
 		cleanup()
 		return nil, fmt.Errorf("import key: %w: %s", err, out)
@@ -158,7 +160,7 @@ func rpmsignSupportsRPMV4() bool {
 }
 
 func firstSecretKeyFingerprint(home string) (string, error) {
-	cmd := exec.Command(gpgBinary(), "--homedir", home, "--batch", "--with-colons", "--list-secret-keys")
+	cmd := exec.Command(gpg.Binary(), "--homedir", home, "--batch", "--with-colons", "--list-secret-keys")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
