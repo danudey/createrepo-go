@@ -8,15 +8,15 @@
 package repo
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"path"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/danudey/createrepo-go/pkg/xfer"
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
 	"github.com/danudey/createrepo-go/pkg/apt/debmeta"
@@ -236,12 +236,7 @@ func OpenWith(ctx context.Context, be backend.Backend, opts Options) (*Repo, err
 }
 
 // Close releases any backend resources.
-func (r *Repo) Close() error {
-	if c, ok := r.be.(backend.Closer); ok {
-		return c.Close()
-	}
-	return nil
-}
+func (r *Repo) Close() error { return backend.Close(r.be) }
 
 // load fetches and parses the suite's existing metadata into the index. A suite
 // with no Release file is treated as empty (only allowed when opts.Create is
@@ -597,15 +592,8 @@ func (r *Repo) nowUnix() int64 {
 // getAll reads an object fully into memory (indexes are small relative to the
 // packages they describe).
 func (r *Repo) getAll(ctx context.Context, relpath string) ([]byte, error) {
-	rc, err := r.be.Get(ctx, relpath)
-	if err != nil {
-		return nil, err
-	}
-	defer rc.Close()
-	return io.ReadAll(rc)
+	return xfer.ReadAll(ctx, r.be, relpath)
 }
-
-func bytesReader(b []byte) io.Reader { return bytes.NewReader(b) }
 
 // sortedMapKeys returns a map's keys in order.
 func sortedMapKeys[V any](m map[string]V) []string {

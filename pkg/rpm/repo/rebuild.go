@@ -2,10 +2,10 @@ package repo
 
 import (
 	"context"
-	"io"
-	"os"
 	"path"
 	"strings"
+
+	"github.com/danudey/createrepo-go/pkg/xfer"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
 	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
@@ -171,11 +171,6 @@ func (r *Repo) ResignTargets() []*repodata.Package {
 // file and returns its path. The caller owns the file and must remove it. It is
 // used by the re-sign path, the only operation that must download existing RPMs.
 func (r *Repo) GetToFile(ctx context.Context, href string) (string, error) {
-	rc, err := r.be.Get(ctx, href)
-	if err != nil {
-		return "", err
-	}
-	defer rc.Close()
 	// The metadata already knows how large the object is, so the download can
 	// be reported against its expected size without asking the backend again.
 	var size int64
@@ -184,21 +179,7 @@ func (r *Repo) GetToFile(ctx context.Context, href string) (string, error) {
 	}
 	item := r.opt.Tracker.Item(path.Base(href), size)
 	defer item.Done()
-
-	f, err := os.CreateTemp("", "cr-resign-*-"+path.Base(href))
-	if err != nil {
-		return "", err
-	}
-	if _, err := io.Copy(f, item.Reader(rc)); err != nil {
-		f.Close()
-		os.Remove(f.Name())
-		return "", err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(f.Name())
-		return "", err
-	}
-	return f.Name(), nil
+	return xfer.GetToTemp(ctx, r.be, href, "cr-resign", item)
 }
 
 // SetForce toggles whether Commit overwrites already-present files whose content

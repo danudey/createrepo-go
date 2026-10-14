@@ -256,8 +256,4 @@ func writeRepoConfig(cmd *cobra.Command, be backend.Backend, cfg *repoconfig.Con
 // closeBackend closes a backend that holds resources, ignoring errors. It is
 // used on error paths before a Repo (which would otherwise own the close) is
 // constructed.
-func closeBackend(be backend.Backend) {
-	if c, ok := be.(backend.Closer); ok {
-		_ = c.Close()
-	}
-}
+func closeBackend(be backend.Backend) { _ = backend.Close(be) }

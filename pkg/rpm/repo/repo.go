@@ -15,6 +15,8 @@ import (
 	"path"
 	"strings"
 
+	"github.com/danudey/createrepo-go/pkg/xfer"
+
 	"github.com/danudey/createrepo-go/pkg/backend"
 	"github.com/danudey/createrepo-go/pkg/progress"
 	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
@@ -139,12 +141,7 @@ func OpenWith(ctx context.Context, be backend.Backend, opts Options) (*Repo, err
 }
 
 // Close releases any backend resources.
-func (r *Repo) Close() error {
-	if c, ok := r.be.(backend.Closer); ok {
-		return c.Close()
-	}
-	return nil
-}
+func (r *Repo) Close() error { return backend.Close(r.be) }
 
 // load fetches and parses existing metadata into the index. A repository with
 // no repomd.xml is treated as empty (only allowed when opts.Create is set).
@@ -324,12 +321,7 @@ func (r *Repo) nowUnix() int64 {
 
 // getAll reads an object fully into memory (metadata files are small).
 func (r *Repo) getAll(ctx context.Context, relpath string) ([]byte, error) {
-	rc, err := r.be.Get(ctx, relpath)
-	if err != nil {
-		return nil, err
-	}
-	defer rc.Close()
-	return readAll(rc)
+	return xfer.ReadAll(ctx, r.be, relpath)
 }
 
 // sha256Hex returns the lowercase hex sha256 of data.

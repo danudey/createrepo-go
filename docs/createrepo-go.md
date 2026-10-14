@@ -179,7 +179,7 @@ createrepo-go copy https://downloads.example.com/el9 s3://my-bucket/el9 --progre
 ```
 
 Each transfer in flight has a bar of its own, labelled with what is being done
-to it (`get`, `put`, `sign`, `upload`, `download`). Where several packages
+to it (`download`, `upload`, `sign`). Where several packages
 transfer at once — `verify --checksums` and `check --level fetch` run several in
 parallel — each one gets a bar. The bottom line is the operation as a whole:
 packages finished, bytes moved, the current rate, and the time left at that

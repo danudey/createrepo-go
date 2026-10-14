@@ -2,20 +2,17 @@ package repo
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path"
-	"sort"
 	"strings"
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
 	"github.com/danudey/createrepo-go/pkg/apt/debmeta"
 	"github.com/danudey/createrepo-go/pkg/backend"
 	"github.com/danudey/createrepo-go/pkg/progress"
+	"github.com/danudey/createrepo-go/pkg/xfer"
 )
 
 // ConfigPath is the repo-root-relative name of the createapt-go config file.
@@ -79,7 +76,7 @@ func (r *Repo) ClearIndex() {
 }
 
 // ObjectKind labels a repository file by the role it plays.
-type ObjectKind string
+type ObjectKind = xfer.Kind
 
 // The kinds of file a repository is made of. Copying treats each kind
 // differently: the Release and its signatures are written last, package files
@@ -91,21 +88,20 @@ const (
 	ObjectIndex      ObjectKind = "index"     // a Packages/Sources file the Release covers
 	ObjectPackage    ObjectKind = "package"   // a pool file an index references
 	ObjectConfig     ObjectKind = "config"    // createapt-go.json
-	ObjectOther      ObjectKind = "other"     // anything else found in the backend
+	ObjectOther                 = xfer.KindOther
 )
 
 // SourceObject is one file that makes up a repository, together with whatever
 // integrity data the metadata records for it. Checksum is empty for files
 // nothing vouches for (the Release itself, and any stray file).
-type SourceObject struct {
-	Path     string
-	Kind     ObjectKind
-	Size     int64  // -1 when unknown
-	Checksum string // lowercase hex sha256
-}
+type SourceObject = xfer.Object
 
-// verifiable reports whether the object carries a checksum this tool can check.
-func (o SourceObject) verifiable() bool { return o.Checksum != "" }
+// volatileKind reports the kinds whose content changes without their length
+// changing — a Release differs from a previous generation only in its Date and
+// checksums — so a copy always rewrites them rather than compare sizes.
+func volatileKind(k ObjectKind) bool {
+	return k == ObjectRelease || k == ObjectReleaseSig || k == ObjectConfig
+}
 
 // Objects enumerates every file that makes up the suite and the pool it draws
 // on. When the backend can list its contents, the listing is authoritative and
@@ -198,9 +194,10 @@ func (r *Repo) Objects(ctx context.Context) (objs []SourceObject, listed bool, e
 
 	objs = make([]SourceObject, 0, len(known))
 	for _, o := range known {
+		o.Volatile = volatileKind(o.Kind)
 		objs = append(objs, o)
 	}
-	sortObjects(objs)
+	xfer.Sort(objs, publishRank)
 	return objs, listed, nil
 }
 
@@ -223,60 +220,24 @@ func classifyObject(p, suite string) ObjectKind {
 	return ObjectOther
 }
 
-// sortObjects puts the objects into publish order: everything a client might
-// need first, then the Release (the atomic publish point), then its signatures.
-// Within a group the order is alphabetical, for reproducible output.
-func sortObjects(objs []SourceObject) {
-	rank := func(o SourceObject) int {
-		switch o.Kind {
-		case ObjectRelease:
-			return 1
-		case ObjectReleaseSig:
-			return 2
-		default:
-			return 0
-		}
+// publishRank orders a copy: everything a client might need first, then the
+// Release (the atomic publish point), then its signatures.
+func publishRank(o SourceObject) int {
+	switch o.Kind {
+	case ObjectRelease:
+		return 1
+	case ObjectReleaseSig:
+		return 2
+	default:
+		return 0
 	}
-	sort.Slice(objs, func(i, j int) bool {
-		if ri, rj := rank(objs[i]), rank(objs[j]); ri != rj {
-			return ri < rj
-		}
-		return objs[i].Path < objs[j].Path
-	})
 }
 
 // CopyOptions controls a verbatim repository copy.
-type CopyOptions struct {
-	// DryRun computes the transfer without writing anything.
-	DryRun bool
-	// Force overwrites a destination object whose content differs from the
-	// source's instead of failing.
-	Force bool
-	// Prune deletes destination objects the source does not have, making the
-	// destination an exact replica. It requires a destination that can list its
-	// contents.
-	Prune bool
-	// Inspect is called with the local temporary copy of each transferred
-	// object once its checksum has been validated and before it is written to
-	// the destination. Returning an error aborts the copy.
-	Inspect func(obj SourceObject, localPath string) error
-	// Progress reports each object as it is handled. action is one of "copy",
-	// "skip" or "delete".
-	Progress func(action string, obj SourceObject)
-
-	// Tracker, if set, draws progress bars for the transfers. A copy moves each
-	// object twice — out of the source and into the destination — so the two
-	// passes appear as separate phases of the same task.
-	Tracker *progress.Tracker
-}
+type CopyOptions = xfer.CopyOptions
 
 // CopyStats summarizes what a copy transferred.
-type CopyStats struct {
-	Copied  int
-	Skipped int
-	Bytes   int64
-	Deleted []string
-}
+type CopyStats = xfer.CopyStats
 
 // CopyExact replicates objs from src to dst byte for byte, verifying every
 // object whose checksum the metadata records. An object already present at the
@@ -284,220 +245,10 @@ type CopyStats struct {
 // interrupted copy resumable. Objects are written in the order given, so the
 // Release lands last and the destination is never a torn repository.
 func CopyExact(ctx context.Context, src, dst backend.Backend, objs []SourceObject, opt CopyOptions) (*CopyStats, error) {
-	stats := &CopyStats{}
-	report := opt.Progress
-	if report == nil {
-		report = func(string, SourceObject) {}
+	if opt.TempPrefix == "" {
+		opt.TempPrefix = "createapt-copy"
 	}
-
-	if !opt.DryRun {
-		// Each object moves twice: fetched from the source, then written to
-		// the destination.
-		opt.Tracker.Begin("copy", len(objs), 2*totalSize(objs))
-		defer opt.Tracker.End()
-	}
-
-	for _, obj := range objs {
-		present, err := destinationMatches(ctx, dst, obj)
-		if err != nil {
-			return nil, err
-		}
-		if present && !opt.Force {
-			stats.Skipped++
-			opt.Tracker.Skip(1, 2*max(obj.Size, 0))
-			report("skip", obj)
-			continue
-		}
-		// A dry run reports the transfer without performing it, so it stays
-		// cheap even for a repository of any size.
-		if opt.DryRun {
-			stats.Copied++
-			if obj.Size > 0 {
-				stats.Bytes += obj.Size
-			}
-			report("copy", obj)
-			continue
-		}
-
-		task := opt.Tracker.Item(path.Base(obj.Path), obj.Size)
-		local, size, err := fetchToTemp(ctx, src, obj, task)
-		if err != nil {
-			task.Done()
-			return nil, err
-		}
-		if opt.Inspect != nil {
-			if err := opt.Inspect(obj, local); err != nil {
-				task.Done()
-				os.Remove(local)
-				return nil, err
-			}
-		}
-		stats.Copied++
-		stats.Bytes += size
-		report("copy", obj)
-		err = putFile(ctx, dst, obj.Path, local, task)
-		task.Done()
-		os.Remove(local)
-		if err != nil {
-			return nil, fmt.Errorf("write %s: %w", obj.Path, err)
-		}
-	}
-
-	if opt.Prune {
-		deleted, err := pruneExtraneous(ctx, dst, objs, opt)
-		if err != nil {
-			return nil, err
-		}
-		stats.Deleted = deleted
-	}
-	return stats, nil
-}
-
-// pruneExtraneous removes destination objects the source does not have.
-func pruneExtraneous(ctx context.Context, dst backend.Backend, objs []SourceObject, opt CopyOptions) ([]string, error) {
-	lister, ok := dst.(backend.Lister)
-	if !ok {
-		return nil, fmt.Errorf("destination %s cannot list its contents, so extraneous files cannot be removed", dst)
-	}
-	keep := make(map[string]bool, len(objs))
-	for _, o := range objs {
-		keep[o.Path] = true
-	}
-	all, err := lister.List(ctx, "")
-	if err != nil {
-		return nil, fmt.Errorf("list %s: %w", dst, err)
-	}
-	var deleted []string
-	for _, o := range all {
-		if keep[o.Path] {
-			continue
-		}
-		deleted = append(deleted, o.Path)
-	}
-	sort.Strings(deleted)
-	if opt.Progress != nil {
-		for _, p := range deleted {
-			opt.Progress("delete", SourceObject{Path: p, Kind: ObjectOther})
-		}
-	}
-	if opt.DryRun {
-		return deleted, nil
-	}
-	for _, p := range deleted {
-		if err := dst.Delete(ctx, p); err != nil {
-			return nil, fmt.Errorf("delete %s: %w", p, err)
-		}
-	}
-	return deleted, nil
-}
-
-// destinationMatches reports whether dst already holds an object identical to
-// the source's. A checksum decides it where one is available (recorded in the
-// metadata and computable remotely); otherwise the size has to stand in.
-func destinationMatches(ctx context.Context, dst backend.Backend, obj SourceObject) (bool, error) {
-	fi, err := dst.Stat(ctx, obj.Path)
-	if errors.Is(err, backend.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("stat %s: %w", obj.Path, err)
-	}
-	if obj.verifiable() {
-		if hasher, ok := dst.(backend.RemoteHasher); ok {
-			sum, ok, herr := hasher.Hash(ctx, obj.Path, backend.AlgoSHA256)
-			if herr != nil && !errors.Is(herr, backend.ErrNotExist) {
-				return false, fmt.Errorf("remote hash %s: %w", obj.Path, herr)
-			}
-			if ok {
-				return strings.EqualFold(sum, obj.Checksum), nil
-			}
-		}
-	}
-	switch obj.Kind {
-	case ObjectRelease, ObjectReleaseSig, ObjectConfig:
-		// Nothing vouches for these, and they are exactly the files whose
-		// content changes without changing length — a Release differs from a
-		// previous generation only in its Date and checksums. They are small,
-		// so they are always rewritten rather than compared by size.
-		return false, nil
-	case ObjectIndex, ObjectPackage, ObjectOther:
-		// Content-addressed or immutable once written, so an equal length means
-		// an equal file.
-	}
-	return obj.Size >= 0 && fi.Size == obj.Size, nil
-}
-
-// fetchToTemp streams an object from be into a temporary file, verifying its
-// size and (when the metadata records one) its checksum. The caller owns the
-// returned file and must remove it. task, when non-nil, is credited with the
-// bytes as they arrive.
-func fetchToTemp(ctx context.Context, be backend.Backend, obj SourceObject, task *progress.Item) (string, int64, error) {
-	task.Phase("download")
-	rc, err := be.Get(ctx, obj.Path)
-	if err != nil {
-		return "", 0, fmt.Errorf("read %s: %w", obj.Path, err)
-	}
-	defer rc.Close()
-
-	f, err := os.CreateTemp("", "createapt-copy-*-"+path.Base(obj.Path))
-	if err != nil {
-		return "", 0, err
-	}
-	name := f.Name()
-	fail := func(err error) (string, int64, error) {
-		f.Close()
-		os.Remove(name)
-		return "", 0, err
-	}
-
-	h := sha256.New()
-	size, err := io.Copy(task.Writer(io.MultiWriter(f, h)), rc)
-	if err != nil {
-		return fail(fmt.Errorf("read %s: %w", obj.Path, err))
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(name)
-		return "", 0, err
-	}
-	if obj.Size >= 0 && size != obj.Size {
-		os.Remove(name)
-		return "", 0, fmt.Errorf("%s: got %d bytes, the metadata says %d", obj.Path, size, obj.Size)
-	}
-	if obj.verifiable() {
-		if sum := hex.EncodeToString(h.Sum(nil)); !strings.EqualFold(sum, obj.Checksum) {
-			os.Remove(name)
-			return "", 0, fmt.Errorf("%s: checksum %s does not match the %s the metadata records",
-				obj.Path, sum, obj.Checksum)
-		}
-	}
-	return name, size, nil
-}
-
-// putFile uploads a local file to a backend. task, when non-nil, is credited
-// with the bytes as they go out.
-func putFile(ctx context.Context, be backend.Backend, dest, local string, task *progress.Item) error {
-	f, err := os.Open(local)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	task.Phase("upload")
-	return be.Put(ctx, dest, task.Reader(f), fi.Size())
-}
-
-// totalSize sums the objects whose size is known.
-func totalSize(objs []SourceObject) int64 {
-	var total int64
-	for _, o := range objs {
-		if o.Size > 0 {
-			total += o.Size
-		}
-	}
-	return total
+	return xfer.CopyExact(ctx, src, dst, objs, opt)
 }
 
 // EntryCopyOptions controls CopyEntriesFrom, which brings selected packages
@@ -543,6 +294,17 @@ func (r *Repo) CopyEntriesFrom(ctx context.Context, src backend.Backend, entries
 	report := opt.Progress
 	if report == nil {
 		report = func(string, aptdata.Entry, string) {}
+	}
+
+	// The locations come from the source's indexes, so every one is checked
+	// before anything moves. A destination location is either one of these or
+	// derived from the layout rules, which only produce safe paths.
+	for _, e := range entries {
+		for _, f := range entryFiles(e) {
+			if err := backend.CheckPath(f.location); err != nil {
+				return nil, fmt.Errorf("%s: %w", e.ID3(), err)
+			}
+		}
 	}
 
 	if !r.opt.DryRun {
@@ -605,7 +367,7 @@ func entryTotalBytes(entries []aptdata.Entry) int64 {
 // copyOneFile transfers a single file of a copied entry.
 func (r *Repo) copyOneFile(ctx context.Context, src backend.Backend, e aptdata.Entry, m fileMove, opt EntryCopyOptions, stats *CopyStats, report func(string, aptdata.Entry, string)) error {
 	if !opt.RebuildMetadata {
-		present, err := destinationMatches(ctx, r.be, SourceObject{
+		present, err := xfer.DestinationMatches(ctx, r.be, SourceObject{
 			Path: m.to, Kind: ObjectPackage, Size: m.size, Checksum: m.checksum,
 		})
 		if err != nil {
@@ -633,9 +395,10 @@ func (r *Repo) copyOneFile(ctx context.Context, src backend.Backend, e aptdata.E
 	task := opt.Tracker.Item(path.Base(m.to), m.size)
 	defer task.Done()
 
-	local, size, err := fetchToTemp(ctx, src, SourceObject{
+	task.Phase(xfer.PhaseDownload)
+	local, size, err := xfer.FetchToTemp(ctx, src, SourceObject{
 		Path: m.from, Kind: ObjectPackage, Size: m.size, Checksum: m.checksum,
-	}, task)
+	}, "createapt-copy", task)
 	if err != nil {
 		return err
 	}
@@ -652,7 +415,8 @@ func (r *Repo) copyOneFile(ctx context.Context, src backend.Backend, e aptdata.E
 	stats.Bytes += size
 	report("copy", e, m.to)
 
-	if err := putFile(ctx, r.be, m.to, local, task); err != nil {
+	task.Phase(xfer.PhaseUpload)
+	if err := xfer.PutFile(ctx, r.be, m.to, local, task); err != nil {
 		return fmt.Errorf("write %s: %w", m.to, err)
 	}
 	r.copied[m.to] = size

@@ -2,10 +2,10 @@ package repo
 
 import (
 	"context"
-	"io"
-	"os"
 	"path"
 	"strings"
+
+	"github.com/danudey/createrepo-go/pkg/xfer"
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
 	"github.com/danudey/createrepo-go/pkg/backend"
@@ -182,25 +182,7 @@ func (r *Repo) GetToFile(ctx context.Context, relpath string) (string, error) {
 // getToFile is GetToFile with a progress task to credit the bytes to. task may
 // be nil.
 func (r *Repo) getToFile(ctx context.Context, relpath string, task *progress.Item) (string, error) {
-	rc, err := r.be.Get(ctx, relpath)
-	if err != nil {
-		return "", err
-	}
-	defer rc.Close()
-	f, err := os.CreateTemp("", "createapt-*-"+path.Base(relpath))
-	if err != nil {
-		return "", err
-	}
-	if _, err := io.Copy(task.Writer(f), rc); err != nil {
-		f.Close()
-		os.Remove(f.Name())
-		return "", err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(f.Name())
-		return "", err
-	}
-	return f.Name(), nil
+	return xfer.GetToTemp(ctx, r.be, relpath, "createapt", task)
 }
 
 // SetForce toggles whether Commit overwrites already-present files whose

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danudey/createrepo-go/pkg/xfer"
+
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
 	"github.com/danudey/createrepo-go/pkg/backend"
 )
@@ -765,33 +767,24 @@ func mustRel(base, dest string) string {
 }
 
 func (r *Repo) uploadFile(ctx context.Context, dest, local string) error {
-	f, err := os.Open(local)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	fi, err := f.Stat()
+	fi, err := os.Stat(local)
 	if err != nil {
 		return err
 	}
 	task := r.opt.Tracker.Item(path.Base(dest), fi.Size())
 	defer task.Done()
-	return r.be.Put(ctx, dest, task.Reader(f), fi.Size())
+	return xfer.PutFile(ctx, r.be, dest, local, task)
 }
 
 func (r *Repo) putBytes(ctx context.Context, dest string, data []byte) error {
 	task := r.opt.Tracker.Item(path.Base(dest), int64(len(data)))
 	defer task.Done()
-	return r.be.Put(ctx, dest, task.Reader(bytesReader(data)), int64(len(data)))
+	return xfer.PutBytes(ctx, r.be, dest, data, task)
 }
 
 // copyFile relocates an existing file within the backend without transferring
 // its bytes. It is only called for actions the plan produced, which requires
 // the backend to be a Copier.
 func (r *Repo) copyFile(ctx context.Context, from, to string) error {
-	c, ok := r.be.(backend.Copier)
-	if !ok {
-		return fmt.Errorf("backend does not support server-side copy")
-	}
-	return c.Copy(ctx, from, to)
+	return xfer.ServerCopy(ctx, r.be, from, to)
 }

@@ -2,15 +2,14 @@ package repo
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"path"
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/danudey/createrepo-go/pkg/xfer"
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
 	"github.com/danudey/createrepo-go/pkg/backend"
@@ -312,7 +311,7 @@ func (r *Repo) verifyFile(ctx context.Context, e aptdata.Entry, f verifiableFile
 	}
 
 	// Content mode against a backend that cannot hash for us: read the object.
-	sum, n, err := hashObject(ctx, r.be, f.location, task)
+	sum, n, err := xfer.HashObject(ctx, r.be, f.location, task)
 	v.downloaded++
 	v.bytesRead += n
 	if err != nil {
@@ -327,21 +326,4 @@ func (r *Repo) verifyFile(ctx context.Context, e aptdata.Entry, f verifiableFile
 		return
 	}
 	v.verified++
-}
-
-// hashObject streams an object from the backend through sha256, returning the
-// hex digest and the number of bytes read. Nothing is buffered: a package of
-// any size costs one pass and no disk.
-func hashObject(ctx context.Context, be backend.Backend, relpath string, task *progress.Item) (string, int64, error) {
-	rc, err := be.Get(ctx, relpath)
-	if err != nil {
-		return "", 0, err
-	}
-	defer rc.Close()
-	h := sha256.New()
-	n, err := io.Copy(task.Writer(h), rc)
-	if err != nil {
-		return "", n, err
-	}
-	return hex.EncodeToString(h.Sum(nil)), n, nil
 }

@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path"
 	"sort"
+
+	"github.com/danudey/createrepo-go/pkg/xfer"
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
 	"github.com/danudey/createrepo-go/pkg/apt/debmeta"
@@ -198,20 +199,6 @@ func (r *Repo) RefreshFromPackages(ctx context.Context, opt RefreshOptions) (*Re
 // no-op cleanup; otherwise it downloads to a temporary file the caller must
 // release through the returned cleanup.
 func (r *Repo) localCopy(ctx context.Context, relpath string, task *progress.Item) (string, func(), error) {
-	if p, ok := backend.LocalPath(r.be, relpath); ok {
-		// A FileStore reports the path of an object whether or not it exists,
-		// so absence has to be established separately.
-		if _, err := os.Stat(p); err != nil {
-			if os.IsNotExist(err) {
-				return "", func() {}, backend.ErrNotExist
-			}
-			return "", func() {}, err
-		}
-		return p, func() {}, nil
-	}
-	tmp, err := r.getToFile(ctx, relpath, task)
-	if err != nil {
-		return "", func() {}, err
-	}
-	return tmp, func() { _ = os.Remove(tmp) }, nil
+	local, cleanup, _, err := xfer.LocalCopy(ctx, r.be, relpath, "createapt", task)
+	return local, cleanup, err
 }

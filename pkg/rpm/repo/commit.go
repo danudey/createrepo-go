@@ -8,6 +8,8 @@ import (
 	"path"
 	"sort"
 
+	"github.com/danudey/createrepo-go/pkg/xfer"
+
 	"github.com/danudey/createrepo-go/pkg/backend"
 	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
 )
@@ -464,31 +466,22 @@ func (r *Repo) obsoleteMetadata(meta *metadataSet) []string {
 }
 
 func (r *Repo) uploadFile(ctx context.Context, href, local string) error {
-	f, err := os.Open(local)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	fi, err := f.Stat()
+	fi, err := os.Stat(local)
 	if err != nil {
 		return err
 	}
 	item := r.opt.Tracker.Item(path.Base(href), fi.Size())
 	defer item.Done()
-	return r.be.Put(ctx, href, item.Reader(f), fi.Size())
+	return xfer.PutFile(ctx, r.be, href, local, item)
 }
 
 func (r *Repo) putBytes(ctx context.Context, href string, data []byte) error {
-	return r.be.Put(ctx, href, bytesReader(data), int64(len(data)))
+	return xfer.PutBytes(ctx, r.be, href, data, nil)
 }
 
 // copyFile relocates an existing RPM within the backend without transferring
 // its bytes. It is only called for actions the plan produced, which requires
 // the backend to be a Copier.
 func (r *Repo) copyFile(ctx context.Context, from, to string) error {
-	c, ok := r.be.(backend.Copier)
-	if !ok {
-		return fmt.Errorf("backend does not support server-side copy")
-	}
-	return c.Copy(ctx, from, to)
+	return xfer.ServerCopy(ctx, r.be, from, to)
 }

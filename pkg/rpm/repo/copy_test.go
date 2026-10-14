@@ -79,8 +79,8 @@ func TestObjectsCoversEveryPublishedFile(t *testing.T) {
 	// Every package and index file carries the checksum the copy verifies against.
 	for _, o := range objs {
 		if o.Kind == ObjectPackage || o.Kind == ObjectMetadata {
-			if !o.verifiable() {
-				t.Errorf("%s has no usable checksum (%q/%q)", o.Path, o.ChecksumType, o.Checksum)
+			if !o.Verifiable() {
+				t.Errorf("%s has no usable checksum (%q)", o.Path, o.Checksum)
 			}
 		}
 	}

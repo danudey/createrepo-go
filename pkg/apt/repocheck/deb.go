@@ -8,7 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
+
+	"github.com/danudey/createrepo-go/pkg/xfer"
 
 	"github.com/danudey/createrepo-go/pkg/apt/debmeta"
 	"github.com/danudey/createrepo-go/pkg/backend"
@@ -82,7 +83,7 @@ func fetchToTempFile(ctx context.Context, be backend.Backend, relpath string, ta
 	}
 	defer rc.Close()
 
-	f, err := os.CreateTemp("", "createapt-check-*-"+path.Base(relpath))
+	f, err := os.CreateTemp("", "createapt-check-*-"+xfer.TempSuffix(relpath))
 	if err != nil {
 		return "", 0, "", err
 	}

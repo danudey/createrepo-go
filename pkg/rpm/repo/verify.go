@@ -2,18 +2,16 @@ package repo
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"path"
 	"sort"
 	"strings"
 	"sync"
 
+	"github.com/danudey/createrepo-go/pkg/xfer"
+
 	"github.com/danudey/createrepo-go/pkg/backend"
-	"github.com/danudey/createrepo-go/pkg/progress"
 	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
 )
 
@@ -265,7 +263,7 @@ func (r *Repo) verifyPackage(ctx context.Context, p *repodata.Package, opt Verif
 
 	// Content mode against a backend that cannot hash for us: read the object.
 	item := r.opt.Tracker.Item(path.Base(p.Location), p.SizePackage)
-	sum, n, err := hashObject(ctx, r.be, p.Location, item)
+	sum, n, err := xfer.HashObject(ctx, r.be, p.Location, item)
 	item.Done()
 	v.downloaded++
 	v.bytesRead += n
@@ -282,21 +280,4 @@ func (r *Repo) verifyPackage(ctx context.Context, p *repodata.Package, opt Verif
 	}
 	v.verified++
 	return v
-}
-
-// hashObject streams an object from the backend through sha256, returning the
-// hex digest and the number of bytes read. Nothing is buffered: an RPM of any
-// size costs one pass and no disk.
-func hashObject(ctx context.Context, be backend.Backend, relpath string, item *progress.Item) (string, int64, error) {
-	rc, err := be.Get(ctx, relpath)
-	if err != nil {
-		return "", 0, err
-	}
-	defer rc.Close()
-	h := sha256.New()
-	n, err := io.Copy(h, item.Reader(rc))
-	if err != nil {
-		return "", n, err
-	}
-	return hex.EncodeToString(h.Sum(nil)), n, nil
 }

@@ -175,6 +175,29 @@ type Closer interface {
 	Close() error
 }
 
+// Close closes be if it holds resources (a Closer), and is a no-op for one
+// that does not.
+func Close(be Backend) error {
+	if c, ok := be.(Closer); ok {
+		return c.Close()
+	}
+	return nil
+}
+
+// CheckPath reports an object path that cannot be safely used as a
+// destination: one that would resolve outside the repository root on any
+// backend, or that holds a backslash, which Windows treats as a separator. A
+// leading slash means the root. Paths read from a source repository's metadata
+// are checked with it before anything is transferred, so a hostile repository
+// is refused up front rather than part-way through a copy.
+func CheckPath(relpath string) error {
+	if strings.Contains(relpath, `\`) {
+		return fmt.Errorf("%w: %q contains a backslash", ErrUnsafePath, relpath)
+	}
+	_, err := remoteRel(relpath)
+	return err
+}
+
 // Open creates a backend for the given repository location. Supported schemes:
 //
 //	(none) or file://   local filesystem

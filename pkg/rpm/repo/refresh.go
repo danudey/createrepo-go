@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
+	pathpkg "path"
 	"sort"
+
+	"github.com/danudey/createrepo-go/pkg/xfer"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
 	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
@@ -142,27 +144,13 @@ func (r *Repo) RefreshFromPackages(ctx context.Context, opt RefreshOptions) (*Re
 // transferred; any other backend downloads to a temporary file and reports how
 // many bytes that cost.
 func (r *Repo) readablePath(ctx context.Context, href string) (path string, cleanup func(), transferred int64, err error) {
-	noop := func() {}
-	if p, ok := backend.LocalPath(r.be, href); ok {
-		if _, err := os.Stat(p); err != nil {
-			if os.IsNotExist(err) {
-				return "", noop, 0, backend.ErrNotExist
-			}
-			return "", noop, 0, err
-		}
-		return p, noop, 0, nil
+	var size int64
+	if p := r.idx.ByLocation(href); p != nil {
+		size = p.SizePackage
 	}
-
-	tmp, err := r.GetToFile(ctx, href)
-	if err != nil {
-		return "", noop, 0, err
-	}
-	fi, err := os.Stat(tmp)
-	if err != nil {
-		os.Remove(tmp)
-		return "", noop, 0, err
-	}
-	return tmp, func() { os.Remove(tmp) }, fi.Size(), nil
+	item := r.opt.Tracker.Item(pathpkg.Base(href), size)
+	defer item.Done()
+	return xfer.LocalCopy(ctx, r.be, href, "cr-resign", item)
 }
 
 // RefreshEstimate reports how many packages RefreshFromPackages would have to
