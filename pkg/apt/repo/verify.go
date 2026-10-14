@@ -7,13 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
-	"github.com/danudey/createrepo-go/pkg/apt/progress"
 	"github.com/danudey/createrepo-go/pkg/backend"
+	"github.com/danudey/createrepo-go/pkg/progress"
 )
 
 // Problem is one discrepancy found while verifying a published repository.
@@ -67,14 +68,14 @@ type VerifyOptions struct {
 	// SkipDependencies omits the intra-repository dependency check.
 	SkipDependencies bool
 
-	// Progress, if set, is called once per entry as its check finishes. It may
+	// Tracker, if set, is called once per entry as its check finishes. It may
 	// be called from several goroutines at once.
 	Progress func(e aptdata.Entry, problems int)
 
-	// Bars, if set, draws progress bars. They only measure something when the
+	// Tracker, if set, draws progress bars. They only measure something when the
 	// check has to read the files: a backend that hashes content for us
 	// finishes each entry in one cheap call.
-	Bars *progress.Bars
+	Tracker *progress.Tracker
 }
 
 // VerifyResult summarizes a verification pass.
@@ -132,8 +133,8 @@ func (r *Repo) Verify(ctx context.Context, opt VerifyOptions) (*VerifyResult, er
 	if opt.Checksums == ChecksumContent && !backend.HashesContent(r.be) {
 		expectedBytes = entryTotalBytes(entries)
 	}
-	opt.Bars.Start("verifying", entryFileCount(entries), expectedBytes)
-	defer opt.Bars.Finish()
+	opt.Tracker.Begin("verify", entryFileCount(entries), expectedBytes)
+	defer opt.Tracker.End()
 
 	conc := opt.Concurrency
 	if conc < 1 {
@@ -214,7 +215,7 @@ func (r *Repo) verifyEntry(ctx context.Context, e aptdata.Entry, opt VerifyOptio
 	var v entryVerdict
 	for _, f := range entryFiles(e) {
 		v.files++
-		task := opt.Bars.Task(f.location, f.size)
+		task := opt.Tracker.Item(path.Base(f.location), f.size)
 		r.verifyFile(ctx, e, f, opt, &v, task)
 		task.Done()
 	}
@@ -247,7 +248,7 @@ func entryFiles(e aptdata.Entry) []verifiableFile {
 }
 
 // verifyFile checks one published file's presence, size and checksum.
-func (r *Repo) verifyFile(ctx context.Context, e aptdata.Entry, f verifiableFile, opt VerifyOptions, v *entryVerdict, task *progress.Task) {
+func (r *Repo) verifyFile(ctx context.Context, e aptdata.Entry, f verifiableFile, opt VerifyOptions, v *entryVerdict, task *progress.Item) {
 	fi, err := r.be.Stat(ctx, f.location)
 	switch {
 	case errors.Is(err, backend.ErrNotExist):
@@ -331,7 +332,7 @@ func (r *Repo) verifyFile(ctx context.Context, e aptdata.Entry, f verifiableFile
 // hashObject streams an object from the backend through sha256, returning the
 // hex digest and the number of bytes read. Nothing is buffered: a package of
 // any size costs one pass and no disk.
-func hashObject(ctx context.Context, be backend.Backend, relpath string, task *progress.Task) (string, int64, error) {
+func hashObject(ctx context.Context, be backend.Backend, relpath string, task *progress.Item) (string, int64, error) {
 	rc, err := be.Get(ctx, relpath)
 	if err != nil {
 		return "", 0, err

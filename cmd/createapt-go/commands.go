@@ -7,8 +7,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
-	"github.com/danudey/createrepo-go/pkg/apt/progress"
 	"github.com/danudey/createrepo-go/pkg/apt/repo"
+	"github.com/danudey/createrepo-go/pkg/progress"
 )
 
 func createCmd() *cobra.Command {
@@ -166,7 +166,7 @@ it had been verified.`,
 			}
 
 			res, err := r.Verify(ctx(cmd), repo.VerifyOptions{
-				Checksums: mode, Concurrency: concurrency, Bars: bars,
+				Checksums: mode, Concurrency: concurrency, Tracker: prog,
 			})
 			if err != nil {
 				return err
@@ -319,4 +319,4 @@ func printSourcesLine(cmd *cobra.Command, r *repo.Repo, baseURL string) {
 
 // humanBytes renders a byte count in the largest unit that keeps it readable.
 // The progress display formats the same figures, so both read alike.
-func humanBytes(n int64) string { return progress.HumanBytes(n) }
+func humanBytes(n int64) string { return progress.Bytes(n) }

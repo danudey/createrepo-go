@@ -116,8 +116,8 @@ func (r *Repo) Commit(ctx context.Context) (*Plan, error) {
 	// Everything from here on transfers or deletes something, which is what the
 	// progress display measures.
 	items, bytes := publishWork(plan, meta)
-	r.opt.Progress.Start("publishing", items, bytes)
-	defer r.opt.Progress.Finish()
+	r.opt.Tracker.Begin("publish", items, bytes)
+	defer r.opt.Tracker.End()
 
 	// 1. Relocate identical files server-side (write the new copy now; the old
 	// copy is removed during GC, after the Release swap, so the repository is
@@ -126,7 +126,7 @@ func (r *Repo) Commit(ctx context.Context) (*Plan, error) {
 		if err := r.copyFile(ctx, c.From, c.To); err != nil {
 			return nil, fmt.Errorf("relocate %s -> %s: %w", c.From, c.To, err)
 		}
-		r.opt.Progress.Item()
+		r.opt.Tracker.Count(1)
 	}
 
 	// 2. Upload package files that need transferring. They must be in place
@@ -179,7 +179,7 @@ func (r *Repo) Commit(ctx context.Context) (*Plan, error) {
 			if err := r.be.Delete(ctx, p); err != nil {
 				return nil, fmt.Errorf("delete %s: %w", p, err)
 			}
-			r.opt.Progress.Item()
+			r.opt.Tracker.Count(1)
 		}
 	}
 	return plan, nil
@@ -774,13 +774,13 @@ func (r *Repo) uploadFile(ctx context.Context, dest, local string) error {
 	if err != nil {
 		return err
 	}
-	task := r.opt.Progress.Task(dest, fi.Size())
+	task := r.opt.Tracker.Item(path.Base(dest), fi.Size())
 	defer task.Done()
 	return r.be.Put(ctx, dest, task.Reader(f), fi.Size())
 }
 
 func (r *Repo) putBytes(ctx context.Context, dest string, data []byte) error {
-	task := r.opt.Progress.Task(dest, int64(len(data)))
+	task := r.opt.Tracker.Item(path.Base(dest), int64(len(data)))
 	defer task.Done()
 	return r.be.Put(ctx, dest, task.Reader(bytesReader(data)), int64(len(data)))
 }

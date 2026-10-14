@@ -287,3 +287,55 @@ func (t *Tracker) completed() int {
 	defer t.mu.Unlock()
 	return t.doneItems
 }
+
+func TestWriterCountsBytesWritten(t *testing.T) {
+	tr, _ := newTestTracker(t)
+	tr.Begin("download", 1, 100)
+	it := tr.Item("one.deb", 100)
+	var sink bytes.Buffer
+	if _, err := io.Copy(it.Writer(&sink), strings.NewReader(strings.Repeat("x", 40))); err != nil {
+		t.Fatal(err)
+	}
+	if got := tr.transferred(); got != 40 {
+		t.Errorf("after writing 40 bytes, operation total = %d, want 40", got)
+	}
+	if sink.Len() != 40 {
+		t.Errorf("writer passed %d bytes through, want 40", sink.Len())
+	}
+	var nilItem *Item
+	if nilItem.Writer(&sink) != io.Writer(&sink) {
+		t.Errorf("nil Item.Writer wrapped the writer; want it passed through")
+	}
+}
+
+func TestCountCreditsItemsWithoutBytes(t *testing.T) {
+	tr, _ := newTestTracker(t)
+	tr.Begin("publish", 3, 100)
+	tr.Count(2)
+	tr.mu.Lock()
+	items, bytes := tr.doneItems, tr.doneBytes
+	tr.mu.Unlock()
+	if items != 2 || bytes != 0 {
+		t.Errorf("after Count(2): %d items, %d bytes done; want 2, 0", items, bytes)
+	}
+}
+
+func TestAsideIsShownButNotCounted(t *testing.T) {
+	tr, _ := newTestTracker(t)
+	tr.Begin("copy", 1, 100)
+	aside := tr.Aside("reread.deb", 500)
+	if aside == nil {
+		t.Fatal("Aside returned nil inside an open operation")
+	}
+	aside.Add(500)
+	aside.Done()
+	tr.mu.Lock()
+	items, bytes, active := tr.doneItems, tr.doneBytes, len(tr.active)
+	tr.mu.Unlock()
+	if items != 0 || bytes != 0 {
+		t.Errorf("after an aside: %d items, %d bytes done; want 0, 0", items, bytes)
+	}
+	if active != 0 {
+		t.Errorf("finished aside still active")
+	}
+}

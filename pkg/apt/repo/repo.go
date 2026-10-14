@@ -20,8 +20,8 @@ import (
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
 	"github.com/danudey/createrepo-go/pkg/apt/debmeta"
-	"github.com/danudey/createrepo-go/pkg/apt/progress"
 	"github.com/danudey/createrepo-go/pkg/backend"
+	"github.com/danudey/createrepo-go/pkg/progress"
 )
 
 // Signer signs a suite's Release file. apt accepts either an inline-signed
@@ -106,10 +106,10 @@ type Options struct {
 	// Signer, if set, signs the Release file.
 	Signer Signer
 
-	// Progress, if set, draws progress bars for the transfers a publish
-	// performs. A nil *progress.Bars is a no-op, which is what a run that was
+	// Tracker, if set, draws progress bars for the transfers a publish
+	// performs. A nil *progress.Tracker is a no-op, which is what a run that was
 	// not asked for progress passes.
-	Progress *progress.Bars
+	Tracker *progress.Tracker
 
 	// now overrides the timestamp source (for tests); zero means time.Now.
 	now int64

@@ -38,10 +38,10 @@ func TestProgressReportsWithoutDisturbingStdout(t *testing.T) {
 	if strings.Contains(progErr, "\x1b[") {
 		t.Errorf("--progress wrote terminal escape sequences to a pipe:\n%q", progErr)
 	}
-	if !strings.Contains(progErr, "publishing:") {
+	if !strings.Contains(progErr, "publish:") {
 		t.Errorf("--progress reported no progress on stderr:\n%s", progErr)
 	}
-	if strings.Contains(plainErr, "publishing:") {
+	if strings.Contains(plainErr, "publish:") {
 		t.Errorf("progress was reported without --progress:\n%s", plainErr)
 	}
 }

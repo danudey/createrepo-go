@@ -12,8 +12,8 @@ import (
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
 	"github.com/danudey/createrepo-go/pkg/apt/debmeta"
-	"github.com/danudey/createrepo-go/pkg/apt/progress"
 	"github.com/danudey/createrepo-go/pkg/backend"
+	"github.com/danudey/createrepo-go/pkg/progress"
 )
 
 // Level selects how deep the checks go. Each level is cumulative.
@@ -90,8 +90,8 @@ type Config struct {
 	Concurrency int
 	// Timeout bounds each individual backend operation. Zero means no timeout.
 	Timeout time.Duration
-	// Progress, if set, draws progress bars while the packages are checked.
-	Progress *progress.Bars
+	// Tracker, if set, draws progress bars while the packages are checked.
+	Tracker *progress.Tracker
 }
 
 // checker runs validations against targets and accumulates results.
@@ -483,7 +483,7 @@ func (ck *checker) checkEntries(ctx context.Context, be backend.Backend, label s
 	}
 	// The target is named by the header printed before its checks, so the bar
 	// spends its width on the figures rather than repeating a long URL.
-	ck.cfg.Progress.Start("checking", files, bytes)
+	ck.cfg.Tracker.Begin("check", files, bytes)
 
 	conc := ck.cfg.Concurrency
 	if conc < 1 {
@@ -506,7 +506,7 @@ func (ck *checker) checkEntries(ctx context.Context, be backend.Backend, label s
 // checkEntry validates every file an entry owns.
 func (ck *checker) checkEntry(ctx context.Context, be backend.Backend, label string, e aptdata.Entry) {
 	for _, f := range entryFiles(e) {
-		task := ck.cfg.Progress.Task(f.loc, f.size)
+		task := ck.cfg.Tracker.Item(path.Base(f.loc), f.size)
 		if ck.cfg.Level >= LevelFetch {
 			ck.fetchAndVerify(ctx, be, label, e, f, task)
 		} else {
@@ -603,7 +603,7 @@ func (ck *checker) headCheck(ctx context.Context, be backend.Backend, label stri
 // fetchAndVerify downloads a file and proves its size and checksum from its
 // content, then — for a .deb, and when the tooling is available — confirms the
 // archive itself parses.
-func (ck *checker) fetchAndVerify(ctx context.Context, be backend.Backend, label string, e aptdata.Entry, f checkFile, task *progress.Task) {
+func (ck *checker) fetchAndVerify(ctx context.Context, be backend.Backend, label string, e aptdata.Entry, f checkFile, task *progress.Item) {
 	opCtx, cancel := ck.opCtx(ctx)
 	defer cancel()
 

@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
-	"github.com/danudey/createrepo-go/pkg/apt/progress"
 	"github.com/danudey/createrepo-go/pkg/backend"
+	"github.com/danudey/createrepo-go/pkg/progress"
 )
 
 // PruneReport summarizes a dependency-aware prune. Removed lists the versions
@@ -181,7 +181,7 @@ func (r *Repo) GetToFile(ctx context.Context, relpath string) (string, error) {
 
 // getToFile is GetToFile with a progress task to credit the bytes to. task may
 // be nil.
-func (r *Repo) getToFile(ctx context.Context, relpath string, task *progress.Task) (string, error) {
+func (r *Repo) getToFile(ctx context.Context, relpath string, task *progress.Item) (string, error) {
 	rc, err := r.be.Get(ctx, relpath)
 	if err != nil {
 		return "", err

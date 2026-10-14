@@ -11,8 +11,8 @@ import (
 	"path"
 
 	"github.com/danudey/createrepo-go/pkg/apt/debmeta"
-	"github.com/danudey/createrepo-go/pkg/apt/progress"
 	"github.com/danudey/createrepo-go/pkg/backend"
+	"github.com/danudey/createrepo-go/pkg/progress"
 )
 
 // errDebToolUnavailable reports that archive verification was skipped because
@@ -75,7 +75,7 @@ func readAll(ctx context.Context, be backend.Backend, relpath string) ([]byte, e
 // fetchToTempFile streams an object into a temporary file, returning its path,
 // size and sha256. The caller owns the file. task, when non-nil, is credited
 // with the bytes as they arrive.
-func fetchToTempFile(ctx context.Context, be backend.Backend, relpath string, task *progress.Task) (local string, size int64, sum string, err error) {
+func fetchToTempFile(ctx context.Context, be backend.Backend, relpath string, task *progress.Item) (local string, size int64, sum string, err error) {
 	rc, err := be.Get(ctx, relpath)
 	if err != nil {
 		return "", 0, "", err

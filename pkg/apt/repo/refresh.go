@@ -5,12 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"sort"
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
 	"github.com/danudey/createrepo-go/pkg/apt/debmeta"
-	"github.com/danudey/createrepo-go/pkg/apt/progress"
 	"github.com/danudey/createrepo-go/pkg/backend"
+	"github.com/danudey/createrepo-go/pkg/progress"
 )
 
 // RefreshResult summarizes a pass of RefreshFromPackages.
@@ -37,7 +38,7 @@ type RefreshResult struct {
 
 // RefreshOptions configures RefreshFromPackages.
 type RefreshOptions struct {
-	// Progress, if set, is called once per package as it is re-read, with
+	// Tracker, if set, is called once per package as it is re-read, with
 	// changed reporting whether the regenerated stanza differed from the
 	// published one.
 	Progress func(p *aptdata.Package, changed bool)
@@ -92,19 +93,22 @@ func (r *Repo) RefreshFromPackages(ctx context.Context, opt RefreshOptions) (*Re
 	sort.Strings(order)
 
 	// Re-reading a remote repository downloads every package, so it is exactly
-	// the kind of run progress is wanted for.
-	var totalBytes int64
-	for _, loc := range order {
-		totalBytes += byLocation[loc].was[0].Size()
+	// the kind of run progress is wanted for. On a local backend the packages
+	// are read in place, which is free, so there is nothing to show.
+	if _, local := backend.LocalPath(r.be, ""); !local {
+		var totalBytes int64
+		for _, loc := range order {
+			totalBytes += byLocation[loc].was[0].Size()
+		}
+		r.opt.Tracker.Begin("download", len(order), totalBytes)
+		defer r.opt.Tracker.End()
 	}
-	r.opt.Progress.Start("re-reading packages", len(order), totalBytes)
-	defer r.opt.Progress.Finish()
 
 	for _, loc := range order {
 		entry := byLocation[loc]
 		published := entry.was[0]
 
-		task := r.opt.Progress.Task(loc, published.Size())
+		task := r.opt.Tracker.Item(path.Base(loc), published.Size())
 		local, cleanup, err := r.localCopy(ctx, loc, task)
 		if errors.Is(err, backend.ErrNotExist) {
 			task.Done()
@@ -193,7 +197,7 @@ func (r *Repo) RefreshFromPackages(ctx context.Context, opt RefreshOptions) (*Re
 // objects are already files on this machine it returns the path in place and a
 // no-op cleanup; otherwise it downloads to a temporary file the caller must
 // release through the returned cleanup.
-func (r *Repo) localCopy(ctx context.Context, relpath string, task *progress.Task) (string, func(), error) {
+func (r *Repo) localCopy(ctx context.Context, relpath string, task *progress.Item) (string, func(), error) {
 	if p, ok := backend.LocalPath(r.be, relpath); ok {
 		// A FileStore reports the path of an object whether or not it exists,
 		// so absence has to be established separately.

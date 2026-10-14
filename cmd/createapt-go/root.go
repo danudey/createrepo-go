@@ -11,11 +11,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
-	"github.com/danudey/createrepo-go/pkg/apt/progress"
 	"github.com/danudey/createrepo-go/pkg/apt/repo"
 	"github.com/danudey/createrepo-go/pkg/apt/repoconfig"
 	"github.com/danudey/createrepo-go/pkg/apt/sign"
 	"github.com/danudey/createrepo-go/pkg/backend"
+	"github.com/danudey/createrepo-go/pkg/progress"
 )
 
 // version is overridable at build time with -ldflags.
@@ -196,9 +196,9 @@ packages are never downloaded.`,
 	return root
 }
 
-// bars is the progress display --progress turns on, and nil otherwise. A nil
-// *progress.Bars is a working no-op, so it is passed to the engine unguarded.
-var bars *progress.Bars
+// prog is the progress display --progress turns on, and nil otherwise. A nil
+// *progress.Tracker is a working no-op, so it is passed to the engine unguarded.
+var prog *progress.Tracker
 
 // preRunE runs before every subcommand: it resolves the compatibility profile
 // and validates that signing-related flags are coherent.
@@ -226,13 +226,12 @@ func preRunE(cmd *cobra.Command, args []string) error {
 func setupProgress(cmd *cobra.Command) {
 	// Cleared first so a second command in the same process (the tests) does
 	// not inherit the previous one's display.
-	bars = nil
-	if !gf.progress {
+	prog = progress.New(cmd.ErrOrStderr(), gf.progress)
+	if prog == nil {
 		return
 	}
-	bars = progress.New(cmd.ErrOrStderr())
-	cmd.SetOut(bars.Writer(cmd.OutOrStdout()))
-	cmd.SetErr(bars.Writer(cmd.ErrOrStderr()))
+	cmd.SetOut(prog.Wrap(cmd.OutOrStdout()))
+	cmd.SetErr(prog.Wrap(cmd.ErrOrStderr()))
 }
 
 // envBool reads a boolean from the environment, accepting the spellings a CI
@@ -390,7 +389,7 @@ func repoOptions(create bool) (repo.Options, error) {
 		PruneBreakDeps:             gf.pruneBreakDeps,
 		RemoveUnreferencedPackages: gf.removeUnreferencedPackages,
 		RemoveStaleMetadata:        gf.removeStaleMetadata,
-		Progress:                   bars,
+		Tracker:                    prog,
 	}
 
 	hashes, err := aptdata.ParseHashes(gf.hashes)
