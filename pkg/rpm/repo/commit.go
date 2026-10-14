@@ -3,13 +3,10 @@ package repo
 import (
 	"context"
 	"fmt"
-	"os"
 	"path"
 	"sort"
 
 	"github.com/danudey/createrepo-go/pkg/publish"
-
-	"github.com/danudey/createrepo-go/pkg/xfer"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
 	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
@@ -88,75 +85,28 @@ func (r *Repo) Commit(ctx context.Context) (*Plan, error) {
 		return plan, nil
 	}
 
-	// 1. Relocate identical RPMs server-side (write the new copy now; the old
-	// copy is removed during GC, after the metadata swap, so the repo is never
-	// torn).
-	for _, c := range plan.Copies {
-		if err := r.copyFile(ctx, c.From, c.To); err != nil {
-			return nil, fmt.Errorf("relocate %s -> %s: %w", c.From, c.To, err)
-		}
+	steps := publish.Steps{
+		Copies:  plan.Copies,
+		Uploads: plan.Uploads,
+		Swap:    []publish.File{{Path: repomdPath, Data: meta.repomd}},
+		GC:      [][]string{plan.ObsoleteMeta, plan.DeletedRPMs, plan.UnreferencedRPMs, plan.StaleMetadata},
 	}
-
-	// 2. Upload RPMs that need transferring. This is the only part of a commit
-	// whose cost is the repository's size rather than its metadata's, so it is
-	// the part progress reporting covers.
-	r.opt.Tracker.Begin("upload", len(plan.Uploads), plan.BytesToUpload)
-	for _, a := range plan.Uploads {
-		if err := r.uploadFile(ctx, a.Location, a.Local); err != nil {
-			r.opt.Tracker.End()
-			return nil, fmt.Errorf("upload %s: %w", a.Location, err)
-		}
-	}
-	r.opt.Tracker.End()
-
-	// 3. Write new metadata blobs (checksum-named; no collision with current).
-	for href, data := range meta.files {
-		if err := r.putBytes(ctx, href, data); err != nil {
-			return nil, fmt.Errorf("write metadata %s: %w", href, err)
-		}
-	}
-
-	// 4. Swap repomd.xml last — this is the atomic publish point.
-	if err := r.putBytes(ctx, repomdPath, meta.repomd); err != nil {
-		return nil, fmt.Errorf("write %s: %w", repomdPath, err)
+	// The data files are checksum-named, so they never collide with what the
+	// current repomd.xml names.
+	for _, href := range plan.MetadataFiles {
+		steps.Metadata = append(steps.Metadata, publish.File{Path: href, Data: meta.files[href]})
 	}
 	if meta.repomdSig != nil {
-		if err := r.putBytes(ctx, repomdPath+".asc", meta.repomdSig); err != nil {
-			return nil, fmt.Errorf("write repomd.xml.asc: %w", err)
-		}
+		steps.Swap = append(steps.Swap, publish.File{Path: repomdPath + ".asc", Data: meta.repomdSig})
 	} else if r.old != nil {
 		// The repository was signed before and is not now. A signature left
 		// behind no longer matches the new repomd.xml, and a client with
 		// repo_gpgcheck=1 would reject the repository rather than treat it as
 		// unsigned.
-		if err := r.be.Delete(ctx, repomdPath+".asc"); err != nil {
-			return nil, fmt.Errorf("delete stale repomd.xml.asc: %w", err)
-		}
+		steps.Retract = []string{repomdPath + ".asc"}
 	}
-
-	// 5. Garbage-collect superseded metadata and RPMs no longer referenced
-	// (including the sources of any relocations performed in step 1).
-	for _, href := range plan.ObsoleteMeta {
-		if err := r.be.Delete(ctx, href); err != nil {
-			return nil, fmt.Errorf("delete obsolete %s: %w", href, err)
-		}
-	}
-	for _, href := range plan.DeletedRPMs {
-		if err := r.be.Delete(ctx, href); err != nil {
-			return nil, fmt.Errorf("delete rpm %s: %w", href, err)
-		}
-	}
-	// 6. Directory-scan cleanups (rebuild --remove-*): delete files the backend
-	// holds that the published state no longer references.
-	for _, href := range plan.UnreferencedRPMs {
-		if err := r.be.Delete(ctx, href); err != nil {
-			return nil, fmt.Errorf("delete unreferenced rpm %s: %w", href, err)
-		}
-	}
-	for _, href := range plan.StaleMetadata {
-		if err := r.be.Delete(ctx, href); err != nil {
-			return nil, fmt.Errorf("delete stale metadata %s: %w", href, err)
-		}
+	if err := publish.Execute(ctx, r.be, steps, r.opt.Tracker); err != nil {
+		return nil, err
 	}
 	return plan, nil
 }
@@ -310,25 +260,4 @@ func (r *Repo) obsoleteMetadata(meta *metadataSet) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-func (r *Repo) uploadFile(ctx context.Context, href, local string) error {
-	fi, err := os.Stat(local)
-	if err != nil {
-		return err
-	}
-	item := r.opt.Tracker.Item(path.Base(href), fi.Size())
-	defer item.Done()
-	return xfer.PutFile(ctx, r.be, href, local, item)
-}
-
-func (r *Repo) putBytes(ctx context.Context, href string, data []byte) error {
-	return xfer.PutBytes(ctx, r.be, href, data, nil)
-}
-
-// copyFile relocates an existing RPM within the backend without transferring
-// its bytes. It is only called for actions the plan produced, which requires
-// the backend to be a Copier.
-func (r *Repo) copyFile(ctx context.Context, from, to string) error {
-	return xfer.ServerCopy(ctx, r.be, from, to)
 }

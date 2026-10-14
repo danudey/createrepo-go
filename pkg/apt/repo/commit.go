@@ -3,15 +3,12 @@ package repo
 import (
 	"context"
 	"fmt"
-	"os"
 	"path"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/danudey/createrepo-go/pkg/publish"
-
-	"github.com/danudey/createrepo-go/pkg/xfer"
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
 	"github.com/danudey/createrepo-go/pkg/backend"
@@ -106,99 +103,36 @@ func (r *Repo) Commit(ctx context.Context) (*Plan, error) {
 		return plan, nil
 	}
 
-	// Everything from here on transfers or deletes something, which is what the
-	// progress display measures.
-	items, bytes := publishWork(plan, meta)
-	r.opt.Tracker.Begin("publish", items, bytes)
-	defer r.opt.Tracker.End()
-
-	// 1. Relocate identical files server-side (write the new copy now; the old
-	// copy is removed during GC, after the Release swap, so the repository is
-	// never torn).
-	for _, c := range plan.Copies {
-		if err := r.copyFile(ctx, c.From, c.To); err != nil {
-			return nil, fmt.Errorf("relocate %s -> %s: %w", c.From, c.To, err)
-		}
-		r.opt.Tracker.Count(1)
-	}
-
-	// 2. Upload package files that need transferring. They must be in place
-	// before any index names them.
-	for _, a := range plan.Uploads {
-		if err := r.uploadFile(ctx, a.Location, a.Local); err != nil {
-			return nil, fmt.Errorf("upload %s: %w", a.Location, err)
-		}
-	}
-
-	// 3. Write the indexes, by-hash copies first so a Release that names them
-	// is never published ahead of the file it points at.
-	for _, dest := range byHashFirst(plan.MetadataFiles) {
-		if err := r.putBytes(ctx, dest, meta.files[dest]); err != nil {
-			return nil, fmt.Errorf("write index %s: %w", dest, err)
-		}
-	}
-
-	// 4. Swap the Release last — this is the atomic publish point.
 	suite := r.opt.suite()
-	if err := r.putBytes(ctx, aptdata.ReleasePath(suite), meta.release); err != nil {
-		return nil, fmt.Errorf("write Release: %w", err)
+	steps := publish.Steps{
+		Copies:  plan.Copies,
+		Uploads: plan.Uploads,
+		// The Release goes in first; InRelease carries its signature inside
+		// the document, so it is never internally inconsistent, and it is
+		// written last because it is the file apt prefers, making it the point
+		// at which modern clients see the new suite.
+		Swap: []publish.File{{Path: aptdata.ReleasePath(suite), Data: meta.release}},
+		GC:   [][]string{plan.ObsoleteMeta, plan.DeletedFiles, plan.UnreferencedFiles, plan.StaleMetadata},
+	}
+	// By-hash copies first, so a Release that names them is never published
+	// ahead of the file it points at.
+	for _, dest := range byHashFirst(plan.MetadataFiles) {
+		steps.Metadata = append(steps.Metadata, publish.File{Path: dest, Data: meta.files[dest]})
 	}
 	if meta.releaseSig != nil {
-		if err := r.putBytes(ctx, aptdata.ReleaseGPGPath(suite), meta.releaseSig); err != nil {
-			return nil, fmt.Errorf("write Release.gpg: %w", err)
-		}
+		steps.Swap = append(steps.Swap, publish.File{Path: aptdata.ReleaseGPGPath(suite), Data: meta.releaseSig})
 	}
-	// InRelease carries its signature inside the document, so it is never
-	// internally inconsistent. It is written last because it is the file apt
-	// prefers, making it the point at which modern clients see the new suite.
 	if meta.inRelease != nil {
-		if err := r.putBytes(ctx, aptdata.InReleasePath(suite), meta.inRelease); err != nil {
-			return nil, fmt.Errorf("write InRelease: %w", err)
-		}
+		steps.Swap = append(steps.Swap, publish.File{Path: aptdata.InReleasePath(suite), Data: meta.inRelease})
 	} else if r.old != nil {
 		// The suite was signed before and is not now; leaving the old
 		// signatures behind would make apt reject the new, valid Release.
-		for _, p := range []string{aptdata.InReleasePath(suite), aptdata.ReleaseGPGPath(suite)} {
-			if err := r.be.Delete(ctx, p); err != nil {
-				return nil, fmt.Errorf("delete stale signature %s: %w", p, err)
-			}
-		}
+		steps.Retract = []string{aptdata.InReleasePath(suite), aptdata.ReleaseGPGPath(suite)}
 	}
-
-	// 5. Garbage-collect superseded metadata and files no longer referenced
-	// (including the sources of any relocations performed in step 1).
-	for _, groups := range [][]string{plan.ObsoleteMeta, plan.DeletedFiles, plan.UnreferencedFiles, plan.StaleMetadata} {
-		for _, p := range groups {
-			if err := r.be.Delete(ctx, p); err != nil {
-				return nil, fmt.Errorf("delete %s: %w", p, err)
-			}
-			r.opt.Tracker.Count(1)
-		}
+	if err := publish.Execute(ctx, r.be, steps, r.opt.Tracker); err != nil {
+		return nil, err
 	}
 	return plan, nil
-}
-
-// publishWork counts what Commit is about to do, for the overall progress bar:
-// every file it writes, relocates or deletes, and the bytes the writes amount
-// to. A relocation and a deletion move no bytes through this process, so they
-// count as items only — which is also why the bar is not purely byte-driven.
-func publishWork(plan *Plan, meta *metadataSet) (items int, bytes int64) {
-	items = len(plan.Copies) + len(plan.Uploads) +
-		len(plan.ObsoleteMeta) + len(plan.DeletedFiles) +
-		len(plan.UnreferencedFiles) + len(plan.StaleMetadata)
-	bytes = plan.BytesToUpload
-
-	for _, body := range meta.files {
-		items++
-		bytes += int64(len(body))
-	}
-	for _, body := range [][]byte{meta.release, meta.releaseSig, meta.inRelease} {
-		if body != nil {
-			items++
-			bytes += int64(len(body))
-		}
-	}
-	return items, bytes
 }
 
 // byHashFirst orders index writes so a checksum-named copy is always in place
@@ -612,27 +546,4 @@ func (r *Repo) obsoleteMetadata(meta *metadataSet) []string {
 // suite directory, so the prefix always matches.
 func mustRel(base, dest string) string {
 	return strings.TrimPrefix(strings.TrimPrefix(dest, base), "/")
-}
-
-func (r *Repo) uploadFile(ctx context.Context, dest, local string) error {
-	fi, err := os.Stat(local)
-	if err != nil {
-		return err
-	}
-	task := r.opt.Tracker.Item(path.Base(dest), fi.Size())
-	defer task.Done()
-	return xfer.PutFile(ctx, r.be, dest, local, task)
-}
-
-func (r *Repo) putBytes(ctx context.Context, dest string, data []byte) error {
-	task := r.opt.Tracker.Item(path.Base(dest), int64(len(data)))
-	defer task.Done()
-	return xfer.PutBytes(ctx, r.be, dest, data, task)
-}
-
-// copyFile relocates an existing file within the backend without transferring
-// its bytes. It is only called for actions the plan produced, which requires
-// the backend to be a Copier.
-func (r *Repo) copyFile(ctx context.Context, from, to string) error {
-	return xfer.ServerCopy(ctx, r.be, from, to)
 }

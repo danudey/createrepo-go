@@ -194,7 +194,7 @@ its metadata's:
 
 | Command | What is reported |
 | --- | --- |
-| `add`, `create`, `remove`, `rebuild` | the RPMs a publish uploads |
+| `add`, `create`, `remove`, `rebuild` | every file the publish uploads, relocates, writes or deletes |
 | `copy` | each object fetched from the source and written to the destination |
 | `rebuild --from-packages`, `--resign-packages` | the RPMs downloaded to re-read or re-sign |
 | `verify --checksums` | the RPMs downloaded to hash, where the backend cannot hash them in place |

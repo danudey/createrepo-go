@@ -25,9 +25,13 @@ type scenario struct {
 func base(p string) string { return filepath.Base(p) }
 
 // progressBytesRE picks the transferred and expected byte figures out of the
-// summary line --progress leaves behind ("upload: 2/2 complete, 13.9 KiB/13.9
+// summary line --progress leaves behind ("publish: 7/7 complete, 16.2 KiB/16.2
 // KiB in 0s ...").
 var progressBytesRE = regexp.MustCompile(`complete, ([\d.]+ \w+)/([\d.]+ \w+) in`)
+
+// publishSummaryRE matches the summary line a whole publish leaves behind,
+// capturing the items done and the items planned.
+var publishSummaryRE = regexp.MustCompile(`publish: (\d+)/(\d+) complete`)
 
 // loc is the repo-relative location an RPM lands at with the default
 // --location-prefix ("Packages"), i.e. where a bare `add` uploads it.
@@ -91,8 +95,9 @@ var scenarios = []scenario{
 		// stores need to keep seekable; running this against each backend is
 		// what proves the upload still works with the display on.
 		res := c.addWith([]string{"--progress"}, r.hello, r.libfoo)
-		if !strings.Contains(res.stderr, "upload: 2/2 complete") {
-			c.t.Errorf("--progress did not report the upload on stderr:\n%s", res.combined())
+		// The publish covers both RPMs plus the metadata written with them.
+		if m := publishSummaryRE.FindStringSubmatch(res.stderr); m == nil || m[1] != m[2] {
+			c.t.Errorf("--progress did not report a completed publish on stderr:\n%s", res.combined())
 		}
 		// The bytes reported must be the bytes the packages hold. On the object
 		// stores the body is read twice — hashed, then sent — so this is what
@@ -104,7 +109,7 @@ var scenarios = []scenario{
 		}
 		// The display belongs on stderr only: a caller reading the command's
 		// output must see exactly what it would have seen without --progress.
-		if strings.Contains(res.stdout, "upload: 2/2 complete") {
+		if publishSummaryRE.MatchString(res.stdout) {
 			c.t.Errorf("progress reporting leaked into stdout:\n%s", res.stdout)
 		}
 		c.wantCount(2)
