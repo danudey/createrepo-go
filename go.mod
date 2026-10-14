@@ -1,6 +1,6 @@
 module github.com/danudey/createrepo-go
 
-go 1.26.4
+go 1.27.2
 
 require (
 	cloud.google.com/go/storage v1.68.0
@@ -14,17 +14,9 @@ require (
 	github.com/pkg/sftp v1.13.10
 	github.com/spf13/cobra v1.10.2
 	github.com/vbauerster/mpb/v8 v8.16.1
-	golang.org/x/crypto v0.57.0
-	golang.org/x/term v0.46.0
+	golang.org/x/crypto v0.58.0
+	golang.org/x/term v0.47.0
 	google.golang.org/api v0.298.0
-)
-
-require (
-	github.com/VividCortex/ewma v1.2.0 // indirect
-	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d // indirect
-	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
-	github.com/mattn/go-runewidth v0.0.28 // indirect
-	github.com/vbauerster/cupwriter v0.0.4 // indirect
 )
 
 require (
@@ -38,6 +30,8 @@ require (
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.38.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.62.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.62.0 // indirect
+	github.com/VividCortex/ewma v1.2.0 // indirect
+	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.13 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.29 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.29 // indirect
@@ -53,6 +47,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.43.4 // indirect
 	github.com/bitfield/gotestdox v0.2.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/cloudflare/circl v1.6.5 // indirect
 	github.com/cncf/xds/go v0.0.0-20260202195803-dba9d589def2 // indirect
 	github.com/dnephin/pflag v1.0.7 // indirect
@@ -73,9 +68,11 @@ require (
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-runewidth v0.0.28 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.8.2 // indirect
+	github.com/vbauerster/cupwriter v0.0.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/detectors/gcp v1.46.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.71.0 // indirect
@@ -85,14 +82,16 @@ require (
 	go.opentelemetry.io/otel/sdk v1.46.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.46.0 // indirect
 	go.opentelemetry.io/otel/trace v1.46.0 // indirect
-	golang.org/x/mod v0.41.0 // indirect
-	golang.org/x/net v0.59.0 // indirect
+	golang.org/x/mod v0.42.0 // indirect
+	golang.org/x/net v0.61.0 // indirect
 	golang.org/x/oauth2 v0.37.0 // indirect
-	golang.org/x/sync v0.23.0 // indirect
-	golang.org/x/sys v0.48.0 // indirect
-	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/telemetry v0.0.0-20261010193011-f71dc92da45e // indirect
+	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
-	golang.org/x/tools v0.49.0 // indirect
+	golang.org/x/tools v0.52.0 // indirect
+	golang.org/x/vuln v1.9.0 // indirect
 	google.golang.org/genproto v0.0.0-20260921155816-b14227669459 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260921155816-b14227669459 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260921155816-b14227669459 // indirect
@@ -104,4 +103,7 @@ require (
 	gotest.tools/gotestsum v1.13.0 // indirect
 )
 
-tool gotest.tools/gotestsum
+tool (
+	golang.org/x/vuln/cmd/govulncheck
+	gotest.tools/gotestsum
+)
