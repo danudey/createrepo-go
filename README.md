@@ -173,16 +173,17 @@ createrepo-go copy https://downloads.example.com/el9 s3://my-bucket/el9 --progre
 ```
 
 ```
-  get    calico-node-3.28.0-1.el9.x86_64.rpm  [=========---]  78%  101 MiB/129 MiB
-  copy   [====--------]  34%  12/57  1.9 GiB/5.7 GiB  48.3 MiB/s  ETA 1m34s
+  download calico-node-3.28.0-1.el9.x86_64.rpm   [=========---]   78%  101.0 MiB/129.0 MiB
+  download calico-typha-3.28.0-1.el9.x86_64.rpm  [===---------]   22%  12.4 MiB/56.1 MiB
+  download [====--------]   34%  12/57  1.9 GiB/5.7 GiB  48.3 MiB/s  ETA 1m34s
 ```
 
-The upper line is the transfer in front of it, labelled with what is being done
-to it (`get`, `put`, `sign`, `upload`, `download`). The lower line is the
-operation as a whole: packages finished, bytes moved, the current rate, and the
-time left at that rate. Where several packages transfer at once — `verify
---checksums` and `check --level fetch` run several in parallel — the oldest is
-shown and the rest are counted as `(+N more)`.
+Each transfer in flight has a bar of its own, labelled with what is being done
+to it (`get`, `put`, `sign`, `upload`, `download`). Where several packages
+transfer at once — `verify --checksums` and `check --level fetch` run several in
+parallel — each one gets a bar. The bottom line is the operation as a whole:
+packages finished, bytes moved, the current rate, and the time left at that
+rate.
 
 The bars cover the operations whose cost is the repository's size rather than
 its metadata's:

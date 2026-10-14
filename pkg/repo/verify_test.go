@@ -150,15 +150,15 @@ func TestVerifyReportsMissingAndResizedPackages(t *testing.T) {
 	if len(res.Problems) < 2 {
 		t.Fatalf("expected a problem for each damaged package, got %v", res.Problems)
 	}
-	joined := ""
+	var joined strings.Builder
 	for _, p := range res.Problems {
-		joined += p.String() + "\n"
+		joined.WriteString(p.String() + "\n")
 	}
-	if !strings.Contains(joined, "missing") {
-		t.Errorf("the deleted package was not reported as missing:\n%s", joined)
+	if !strings.Contains(joined.String(), "missing") {
+		t.Errorf("the deleted package was not reported as missing:\n%s", joined.String())
 	}
-	if !strings.Contains(joined, "size") {
-		t.Errorf("the truncated package's size was not reported:\n%s", joined)
+	if !strings.Contains(joined.String(), "size") {
+		t.Errorf("the truncated package's size was not reported:\n%s", joined.String())
 	}
 }
 

@@ -372,10 +372,7 @@ func (ck *checker) checkPackages(ctx context.Context, be backend.Backend, label 
 		defer ck.cfg.Tracker.End()
 	}
 
-	conc := ck.cfg.Concurrency
-	if conc < 1 {
-		conc = 1
-	}
+	conc := max(ck.cfg.Concurrency, 1)
 	sem := make(chan struct{}, conc)
 	var wg sync.WaitGroup
 	for _, p := range pkgs {

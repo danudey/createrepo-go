@@ -13,9 +13,18 @@ require (
 	github.com/klauspost/compress v1.18.7
 	github.com/pkg/sftp v1.13.10
 	github.com/spf13/cobra v1.10.2
+	github.com/vbauerster/mpb/v8 v8.16.1
 	golang.org/x/crypto v0.57.0
 	golang.org/x/term v0.46.0
 	google.golang.org/api v0.298.0
+)
+
+require (
+	github.com/VividCortex/ewma v1.2.0 // indirect
+	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d // indirect
+	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+	github.com/mattn/go-runewidth v0.0.28 // indirect
+	github.com/vbauerster/cupwriter v0.0.4 // indirect
 )
 
 require (

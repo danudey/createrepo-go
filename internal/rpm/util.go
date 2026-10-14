@@ -9,17 +9,17 @@ import (
 // formatted must be in UTC for Format to generate the correct format.
 const TimeFormat = "Mon Jan _2 15:04:05 2006"
 
-func errorf(format string, a ...interface{}) error {
+func errorf(format string, a ...any) error {
 	return fmt.Errorf("rpm: "+format, a...)
 }
 
 func parseVersion(v string) (epoch int, version, release string) {
-	if i := strings.IndexByte(v, ':'); i >= 0 {
-		epoch, v = parseInt(v[:i]), v[i+1:]
+	if before, after, ok := strings.Cut(v, ":"); ok {
+		epoch, v = parseInt(before), after
 	}
 
-	if i := strings.IndexByte(v, '-'); i >= 0 {
-		return epoch, v[:i], v[i+1:]
+	if before, after, ok := strings.Cut(v, "-"); ok {
+		return epoch, before, after
 	}
 
 	return epoch, v, ""

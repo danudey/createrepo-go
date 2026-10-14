@@ -127,10 +127,7 @@ func (r *Repo) Verify(ctx context.Context, opt VerifyOptions) (*VerifyResult, er
 		}
 	}
 
-	conc := opt.Concurrency
-	if conc < 1 {
-		conc = 1
-	}
+	conc := max(opt.Concurrency, 1)
 	var (
 		mu  sync.Mutex
 		wg  sync.WaitGroup

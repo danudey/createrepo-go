@@ -75,7 +75,7 @@ func CompareVersions(a, b string) int {
 	segs := int(math.Min(float64(len(segsa)), float64(len(segsb))))
 
 	// compare each segment
-	for i := 0; i < segs; i++ {
+	for i := range segs {
 		a := segsa[i]
 		b := segsb[i]
 

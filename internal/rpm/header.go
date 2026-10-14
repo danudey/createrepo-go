@@ -63,7 +63,7 @@ func readHeader(r io.Reader, pad bool) (*Header, error) {
 
 	// decode the index
 	indexBytes := make([]rpmIndex, hdrBytes.IndexCount())
-	for i := 0; i < len(indexBytes); i++ {
+	for i := range indexBytes {
 		if _, err := r.Read(indexBytes[i][:]); err != nil {
 			return nil, err
 		}
@@ -87,7 +87,7 @@ func readHeader(r io.Reader, pad bool) (*Header, error) {
 			return nil, errorf("invalid value count for index %d: %d", i, ix.ValueCount())
 		}
 		o := ix.Offset()
-		var v interface{}
+		var v any
 		switch ix.Type() {
 		case TagTypeBinary, TagTypeChar, TagTypeInt8:
 			if o+ix.ValueCount() > len(buf) {

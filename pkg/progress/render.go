@@ -2,113 +2,150 @@ package progress
 
 import (
 	"fmt"
+	"math"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"github.com/vbauerster/mpb/v8"
+	"github.com/vbauerster/mpb/v8/decor"
 )
 
-// The display is drawn in place on a terminal, which needs three standard
-// terminal control sequences. They are written only when the output really is a
-// terminal (see Tracker.tty); the fallback path prints plain lines instead.
-const (
-	// csi introduces a control sequence.
-	csi = "\x1b["
-	// cursorUpFmt moves the cursor up n rows.
-	cursorUpFmt = csi + "%dA"
-	// clearBelow erases from the cursor to the end of the screen.
-	clearBelow = csi + "0J"
-	// lineStart returns the cursor to column one.
-	lineStart = "\r"
-)
+// The terminal display is drawn by mpb: one bar per transfer in flight, and a
+// bar for the operation as a whole pinned beneath them. Every bar is created
+// with no total of its own (see newBar), so mpb never decides by itself that a
+// bar is finished; the Tracker says when, which is what lets an item's bar be
+// restarted for its next phase.
 
-const (
-	// barWidth is the width of a bar on a normal terminal; narrowBar is used
-	// when the terminal is too narrow to spare the room.
-	barWidth   = 24
-	narrowBar  = 12
-	narrowCols = 96
-)
+// Use box drawing characters for the progress bar because it looks nicer.
+var barStyle = mpb.BarStyle().Lbound(" ").Filler("━").Tip("━").Padding(" ").Rbound(" ")
 
-// drawLocked repaints the display in place. Called with t.mu held.
-func (t *Tracker) drawLocked() {
-	t.eraseLocked()
-	for _, line := range t.renderLocked() {
-		fmt.Fprintln(t.out, line)
-		t.lines++
-	}
+// totalPriority keeps the operation's bar below every transfer's bar.
+const totalPriority = math.MaxInt
+
+// startDisplayLocked creates the mpb container and the operation's bar for the
+// operation just begun. Called with t.mu held.
+func (t *Tracker) startDisplayLocked() {
+	t.p = mpb.New(
+		mpb.WithOutput(t.out),
+		mpb.WithWidth(t.width()),
+		mpb.WithRefreshRate(paintInterval),
+		// The Tracker has already decided the output is a terminal, which mpb
+		// confirms for itself on an *os.File. This keeps it drawing when it
+		// cannot tell, such as into a test buffer. (ForceTTY would not do: it
+		// makes mpb ask the writer for a terminal size it does not have.)
+		mpb.WithAutoRefresh(),
+	)
+	op := t.op
+	t.total = t.newBar(t.totalBytes,
+		mpb.BarPriority(totalPriority),
+		mpb.PrependDecorators(decor.Name(label(op))),
+		mpb.AppendDecorators(decor.Any(t.shown.overallMeasure)),
+	)
 }
 
-// eraseLocked removes the display from the screen, leaving the cursor where it
-// was before the display was drawn, so whatever is written next lands on a
-// clean line. Called with t.mu held.
-func (t *Tracker) eraseLocked() {
-	if !t.tty || t.lines == 0 {
+// stopDisplayLocked takes every bar off the screen and waits for mpb to finish
+// drawing, so that whatever is written next lands on a clean line. Called with
+// t.mu held; the bars' decorators never take t.mu, so waiting here is safe.
+func (t *Tracker) stopDisplayLocked() {
+	if t.p == nil {
 		return
 	}
-	fmt.Fprintf(t.out, cursorUpFmt+lineStart+clearBelow, t.lines)
-	t.lines = 0
+	for _, it := range t.active {
+		it.bar.Abort(true)
+	}
+	t.total.Abort(true)
+	t.p.Wait()
+	t.p, t.total = nil, nil
 }
 
-// renderLocked builds the display: a line for the transfer currently in front
-// of us (when there is one) and a line for the operation as a whole.
-func (t *Tracker) renderLocked() []string {
+// newBar adds a bar that shows total as its size but never completes on its
+// own: mpb treats a bar created with a zero total as open-ended, and SetTotal
+// without forceComplete changes what is shown without changing that.
+func (t *Tracker) newBar(total int64, opts ...mpb.BarOption) *mpb.Bar {
+	b := t.p.New(0, barStyle, append(opts, mpb.BarRemoveOnComplete())...)
+	if total > 0 {
+		b.SetTotal(total, false)
+	}
+	return b
+}
+
+// itemBarLocked adds the bar for one transfer. Called with t.mu held.
+func (t *Tracker) itemBarLocked(it *Item) *mpb.Bar {
+	if t.p == nil {
+		return nil
+	}
 	width := t.width()
-	var lines []string
-	if len(t.active) > 0 {
-		lines = append(lines, t.itemLine(t.active[0], len(t.active)-1, width))
-	}
-	return append(lines, t.overallLine(width))
+	name := pad(it.name, nameCols(width))
+	return t.newBar(it.size,
+		mpb.PrependDecorators(
+			decor.Any(func(decor.Statistics) string { return label(*it.label.Load()) }),
+			decor.Name(name+"  "),
+		),
+		mpb.AppendDecorators(decor.Any(func(s decor.Statistics) string {
+			return itemMeasure(s.Current, it.size)
+		}, decor.WC{W: measureWidth, C: decor.DindentRight})),
+	)
 }
 
-// itemLine renders the transfer in progress. With several running at once (a
-// concurrent verify or check) the oldest one is shown and the rest are counted,
-// which keeps the display two lines tall however wide the fan-out is.
-func (t *Tracker) itemLine(it *Item, others, width int) string {
-	suffix := ""
-	if others > 0 {
-		suffix = fmt.Sprintf("  (+%d more)", others)
+// itemMeasure is what follows a transfer's bar: how far through it is, or just
+// the bytes moved when its size is not known.
+func itemMeasure(done, size int64) string {
+	if size <= 0 {
+		return " " + Bytes(done)
 	}
-	cols := barCols(width)
-	room := nameCols(width, cols) - len(suffix)
-
-	measure := Bytes(it.done)
-	if it.size > 0 {
-		frac := fraction(it.done, it.size)
-		measure = fmt.Sprintf("%s %3.0f%%  %s/%s", bar(frac, cols), frac*100, Bytes(it.done), Bytes(it.size))
-	}
-	return clip(label(it.phase)+pad(it.name, room)+"  "+measure+suffix, width)
+	return fmt.Sprintf(" %3.0f%%  %s/%s", fraction(done, size)*100, Bytes(done), Bytes(size))
 }
 
-// overallLine renders the operation as a whole: how much of the work is done,
+// shown is the part of the operation's state the operation's bar displays that
+// mpb does not track itself. mpb draws from its own goroutines, so this is kept
+// in atomics rather than behind t.mu: a decorator that took t.mu could deadlock
+// against stopDisplayLocked, which holds it while waiting for mpb.
+type shown struct {
+	doneItems, totalItems atomic.Int64
+	doneBytes, totalBytes atomic.Int64
+	rate                  atomicFloat
+}
+
+// atomicFloat is a float64 that can be read and written from any goroutine.
+type atomicFloat struct{ bits atomic.Uint64 }
+
+func (f *atomicFloat) Load() float64   { return math.Float64frombits(f.bits.Load()) }
+func (f *atomicFloat) Store(v float64) { f.bits.Store(math.Float64bits(v)) }
+
+// overallMeasure renders the operation as a whole: how much of the work is done,
 // how fast it is going, and how long the rest should take.
-func (t *Tracker) overallLine(width int) string {
+func (s *shown) overallMeasure(decor.Statistics) string {
+	done, total := s.doneBytes.Load(), s.totalBytes.Load()
 	var parts []string
-	if t.totalBytes > 0 {
-		frac := fraction(t.doneBytes, t.totalBytes)
-		parts = append(parts, fmt.Sprintf("%s %3.0f%%", bar(frac, barCols(width)), frac*100))
+	if total > 0 {
+		parts = append(parts, fmt.Sprintf("%3.0f%%", fraction(done, total)*100))
 	}
-	parts = append(parts, fmt.Sprintf("%d/%d", t.doneItems, t.totalItems))
-	if t.totalBytes > 0 {
-		parts = append(parts, fmt.Sprintf("%s/%s", Bytes(t.doneBytes), Bytes(t.totalBytes)))
+	parts = append(parts, fmt.Sprintf("%d/%d", s.doneItems.Load(), s.totalItems.Load()))
+	if total > 0 {
+		parts = append(parts, fmt.Sprintf("%s/%s", Bytes(done), Bytes(total)))
 	}
-	if rate := t.rate.perSecond(); rate > 0 {
+	if rate := s.rate.Load(); rate > 0 {
 		parts = append(parts, Bytes(int64(rate))+"/s")
-		if eta, ok := t.etaLocked(rate); ok {
-			parts = append(parts, "ETA "+Duration(eta))
+		if left := total - done; left > 0 {
+			parts = append(parts, "ETA "+Duration(time.Duration(float64(left)/rate*float64(time.Second))))
 		}
 	}
-	// The operation's own line is labelled with the operation, so the bar can
-	// start right after it instead of past a name column.
-	return clip(label(t.op)+strings.Join(parts, "  "), width)
+	return " " + strings.Join(parts, "  ")
 }
 
-// etaLocked estimates the time left at the current rate. It reports false when
-// there is nothing left to transfer or nothing to base an estimate on.
-func (t *Tracker) etaLocked(rate float64) (time.Duration, bool) {
-	left := t.totalBytes - t.doneBytes
-	if left <= 0 || rate <= 0 {
-		return 0, false
+// publishLocked copies the operation's totals to the display. Called with t.mu
+// held, after anything that changes them.
+func (t *Tracker) publishLocked() {
+	t.shown.doneItems.Store(int64(t.doneItems))
+	t.shown.totalItems.Store(int64(t.totalItems))
+	t.shown.doneBytes.Store(t.doneBytes)
+	t.shown.totalBytes.Store(t.totalBytes)
+	t.shown.rate.Store(t.rate.perSecond())
+	if t.total != nil {
+		t.total.SetTotal(max(t.totalBytes, 0), false)
+		t.total.SetCurrent(max(t.doneBytes, 0))
 	}
-	return time.Duration(float64(left) / rate * float64(time.Second)), true
 }
 
 // summaryLocked is the single line printed when an operation ends, and
@@ -126,21 +163,23 @@ func (t *Tracker) summaryLocked(now time.Time) string {
 	return line
 }
 
-// Both display lines start with an indent and a word in a column of its own —
-// the phase for a transfer, the operation for the total — so that the bars
-// beside them line up.
+// Every bar starts with an indent and a word in a column of its own — the phase
+// for a transfer, the operation for the total — so that the bars line up.
 const (
-	indent     = "  "
-	labelWidth = 7
+	indent = "  "
+	// labelWidth fits the longest label, "download", and the space after it.
+	labelWidth = 9
 	// minName is the narrowest useful name column.
 	minName = 8
-	// measureWidth is the room reserved for what follows a bar: a percentage
-	// and a pair of byte figures. It is what a name column is sized against, so
-	// that the bar keeps its column as those figures change length.
+	// barRoom is what a name column leaves for the bar itself.
+	barRoom = 24
+	// measureWidth is the room reserved for what follows a transfer's bar: a
+	// percentage and a pair of byte figures. Reserving it keeps the bar in one
+	// place as those figures change length.
 	measureWidth = 30
 )
 
-// label renders the word a display line opens with.
+// label renders the word a bar opens with.
 func label(word string) string {
 	return fmt.Sprintf("%s%-*s", indent, labelWidth, word)
 }
@@ -151,37 +190,14 @@ func pad(name string, n int) string {
 	return fmt.Sprintf("%-*s", n, clip(name, n))
 }
 
-// nameCols is the width of the name column at this terminal width. It is
-// derived from the width alone rather than from what is being displayed, so a
-// transfer's bar stays in one place instead of sliding about as the byte
-// figures beside it grow and shrink.
-func nameCols(width, cols int) int {
-	return max(width-len(indent)-labelWidth-2-cols-measureWidth, minName)
-}
-
-// barCols is how wide a bar may be at this terminal width.
-func barCols(width int) int {
-	if width < narrowCols {
-		return narrowBar
-	}
-	return barWidth
-}
-
-// bar renders a proportion as a fixed-width ASCII bar. ASCII keeps it correct
-// in any terminal and any locale, which a block-drawing character does not.
-func bar(frac float64, cols int) string {
-	filled := int(frac * float64(cols))
-	switch {
-	case filled < 0:
-		filled = 0
-	case filled > cols:
-		filled = cols
-	}
-	return "[" + strings.Repeat("=", filled) + strings.Repeat("-", cols-filled) + "]"
+// nameCols is the width of the name column at this terminal width. It depends
+// on the width alone, so every transfer's bar starts in the same column.
+func nameCols(width int) int {
+	return max(width-len(indent)-labelWidth-2-barRoom-measureWidth, minName)
 }
 
 // fraction is done/total, clamped to [0,1] so an unexpected overshoot cannot
-// draw outside the bar.
+// report more than all of it.
 func fraction(done, total int64) float64 {
 	if total <= 0 {
 		return 0
