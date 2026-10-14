@@ -2,12 +2,12 @@ package aptdata
 
 import (
 	"bytes"
-	"compress/bzip2"
 	"compress/gzip"
 	"fmt"
 	"io"
-	"path"
 	"strings"
+
+	"github.com/danudey/createrepo-go/pkg/compress"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz"
@@ -151,63 +151,15 @@ func (c Compression) Compress(data []byte) ([]byte, error) {
 	}
 }
 
-// Decompress decodes an index whose compression is inferred from its filename
-// extension. An unrecognized extension is treated as uncompressed.
-//
-// Nothing here shells out: gzip, bzip2, xz and zstd are all decoded in process,
-// so a repository can be read on a host with no compression utilities
-// installed.
+// Decompress decodes an index, whatever its compression; uncompressed data is
+// returned unchanged. See package compress.
 func Decompress(name string, data []byte) ([]byte, error) {
-	switch strings.ToLower(path.Ext(name)) {
-	case extGZIP:
-		r, err := gzip.NewReader(bytes.NewReader(data))
-		if err != nil {
-			return nil, fmt.Errorf("gzip %s: %w", name, err)
-		}
-		defer r.Close()
-		return io.ReadAll(r)
-	case extXZ:
-		r, err := xz.NewReader(bytes.NewReader(data))
-		if err != nil {
-			return nil, fmt.Errorf("xz %s: %w", name, err)
-		}
-		return io.ReadAll(r)
-	case extZSTD, ".zstd":
-		r, err := zstd.NewReader(bytes.NewReader(data))
-		if err != nil {
-			return nil, fmt.Errorf("zstd %s: %w", name, err)
-		}
-		defer r.Close()
-		return io.ReadAll(r)
-	case extBZ2:
-		return io.ReadAll(bzip2.NewReader(bytes.NewReader(data)))
-	default:
-		return data, nil
-	}
+	return compress.Decompress(name, data)
 }
 
-// DecompressStream wraps r with a decoder chosen from name's extension. The
-// caller closes the returned reader. It is used where an index is large enough
-// that buffering it whole would be wasteful.
+// DecompressStream wraps r with the decoder its content calls for. The caller
+// closes the returned reader. It is used where an index is large enough that
+// buffering it whole would be wasteful.
 func DecompressStream(name string, r io.Reader) (io.ReadCloser, error) {
-	switch strings.ToLower(path.Ext(name)) {
-	case extGZIP:
-		return gzip.NewReader(r)
-	case extXZ:
-		xr, err := xz.NewReader(r)
-		if err != nil {
-			return nil, err
-		}
-		return io.NopCloser(xr), nil
-	case extZSTD, ".zstd":
-		zr, err := zstd.NewReader(r)
-		if err != nil {
-			return nil, err
-		}
-		return zr.IOReadCloser(), nil
-	case extBZ2:
-		return io.NopCloser(bzip2.NewReader(r)), nil
-	default:
-		return io.NopCloser(r), nil
-	}
+	return compress.DecompressStream(name, r)
 }

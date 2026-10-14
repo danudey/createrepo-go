@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"testing"
 
+	"github.com/danudey/createrepo-go/pkg/compress"
+
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -47,7 +49,7 @@ func TestDecompressReadsForeignCompression(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			encoded := c.encode(t, plain)
-			got, err := decompress(encoded)
+			got, err := compress.Decompress("", encoded)
 			if err != nil {
 				t.Fatalf("decompress %s metadata: %v", c.name, err)
 			}
@@ -79,7 +81,7 @@ func pipeThrough(t *testing.T, data []byte, name string, args ...string) []byte 
 // uncompressed primary.xml is read.
 func TestDecompressUnknownMagicIsLeftAlone(t *testing.T) {
 	in := []byte("not compressed at all")
-	got, err := decompress(in)
+	got, err := compress.Decompress("", in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +99,7 @@ func TestZstdCompressionIsDetectable(t *testing.T) {
 	if _, err := zstd.NewReader(bytes.NewReader(out)); err != nil {
 		t.Fatalf("zstd output is not readable: %v", err)
 	}
-	if !hasMagic(out, 0x28, 0xb5, 0x2f, 0xfd) {
+	if !bytes.HasPrefix(out, []byte{0x28, 0xb5, 0x2f, 0xfd}) {
 		t.Error("zstd output does not carry the magic decompress detects")
 	}
 }

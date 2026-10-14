@@ -28,6 +28,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/danudey/createrepo-go/pkg/compress"
+
 	"github.com/danudey/createrepo-go/pkg/backend"
 	"github.com/danudey/createrepo-go/pkg/progress"
 	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
@@ -276,7 +278,7 @@ func (ck *checker) checkMetadataFile(ctx context.Context, be backend.Backend, la
 	// Decompressed (open) size + checksum. The open checksum uses the same
 	// algorithm as the closed checksum in createrepo/repomd output, so reuse the
 	// entry's checksum type.
-	dr, closeFn, derr := decompressReader(bytes.NewReader(raw), d.Location)
+	dr, derr := compress.DecompressStream(d.Location, bytes.NewReader(raw))
 	if derr != nil {
 		// The compressed file's size + checksum are still validated above.
 		return nil, Result{
@@ -286,7 +288,7 @@ func (ck *checker) checkMetadataFile(ctx context.Context, be backend.Backend, la
 	}
 	openHasher, openSupported := newHasher(d.ChecksumType)
 	decompressed, err := io.ReadAll(io.TeeReader(dr, openHasher))
-	closeFn()
+	dr.Close()
 	if err != nil {
 		return nil, Result{Target: label, Kind: kind, Loc: loc, Status: StatusFail, Detail: "decompressing: " + err.Error()}
 	}

@@ -15,6 +15,8 @@ import (
 	"path"
 	"strings"
 
+	"github.com/danudey/createrepo-go/pkg/compress"
+
 	"github.com/danudey/createrepo-go/pkg/xfer"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
@@ -212,7 +214,7 @@ func (r *Repo) loadData(ctx context.Context, repomd *repodata.Repomd, typ string
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s metadata %s: %w", typ, d.Location, err)
 	}
-	return decompress(raw)
+	return compress.Decompress(d.Location, raw)
 }
 
 // MetadataDocument returns the decompressed contents of the metadata document

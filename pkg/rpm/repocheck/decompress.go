@@ -15,19 +15,12 @@
 package repocheck
 
 import (
-	"compress/bzip2"
-	"compress/gzip"
 	"crypto/md5"  // #nosec G501 -- a checksum type repomd.xml may name; see newHasher.
 	"crypto/sha1" // #nosec G505 -- likewise.
 	"crypto/sha256"
 	"crypto/sha512"
-	"fmt"
 	"hash"
-	"io"
-	"os/exec"
 	"strings"
-
-	"github.com/klauspost/compress/zstd"
 )
 
 // newHasher returns a hash for the named algorithm. supported reports whether
@@ -53,51 +46,4 @@ func newHasher(typ string) (h hash.Hash, supported bool) {
 	default:
 		return sha256.New(), false
 	}
-}
-
-// decompressReader wraps r with a decompressor chosen from the href's
-// extension. For .xz it shells out to the "xz" command (no pure-Go xz decoder
-// is bundled); the returned closeFn must be called to release any external
-// process or decoder resources.
-func decompressReader(r io.Reader, href string) (out io.Reader, closeFn func(), err error) {
-	lower := strings.ToLower(href)
-	noop := func() {}
-	switch {
-	case strings.HasSuffix(lower, ".zst") || strings.HasSuffix(lower, ".zstd"):
-		zr, err := zstd.NewReader(r)
-		if err != nil {
-			return nil, noop, err
-		}
-		return zr.IOReadCloser(), func() { zr.Close() }, nil
-	case strings.HasSuffix(lower, ".gz"):
-		gz, err := gzip.NewReader(r)
-		if err != nil {
-			return nil, noop, err
-		}
-		return gz, func() { _ = gz.Close() }, nil
-	case strings.HasSuffix(lower, ".bz2"):
-		return bzip2.NewReader(r), noop, nil
-	case strings.HasSuffix(lower, ".xz"):
-		return xzDecompress(r)
-	default:
-		// Assume uncompressed XML.
-		return r, noop, nil
-	}
-}
-
-// xzDecompress pipes r through the external xz command.
-func xzDecompress(r io.Reader) (io.Reader, func(), error) {
-	if _, err := exec.LookPath("xz"); err != nil {
-		return nil, func() {}, fmt.Errorf("xz-compressed metadata requires the 'xz' command, which was not found in PATH")
-	}
-	cmd := exec.Command("xz", "--decompress", "--stdout")
-	cmd.Stdin = r
-	pipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, func() {}, err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, func() {}, err
-	}
-	return pipe, func() { _ = cmd.Wait() }, nil
 }
