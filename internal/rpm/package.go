@@ -64,15 +64,25 @@ func Open(name string) (*Package, error) {
 // relationships such as provides, conflicts, obsoletes and requires.
 func (c *Package) dependencies(nevrsTagID, flagsTagID, namesTagID, versionsTagID int) []Dependency {
 	// TODO: Implement NEVRS tags
-	// TODO: error handling
 	flgs := c.Header.GetTag(flagsTagID).Int64Slice()
 	names := c.Header.GetTag(namesTagID).StringSlice()
 	vers := c.Header.GetTag(versionsTagID).StringSlice()
 	deps := make([]Dependency, len(names))
 	for i := range names {
-		epoch, ver, rel := parseVersion(vers[i])
+		// The three arrays are parallel in any package rpm would accept, but
+		// the header is untrusted input: a short array reads as zero values
+		// here rather than a panic. Validate reports the inconsistency.
+		var flags int
+		if i < len(flgs) {
+			flags = int(flgs[i])
+		}
+		var epoch int
+		var ver, rel string
+		if i < len(vers) {
+			epoch, ver, rel = parseVersion(vers[i])
+		}
 		deps[i] = &dependency{
-			flags:   int(flgs[i]),
+			flags:   flags,
 			name:    names[i],
 			epoch:   epoch,
 			version: ver,
@@ -80,6 +90,76 @@ func (c *Package) dependencies(nevrsTagID, flagsTagID, namesTagID, versionsTagID
 		}
 	}
 	return deps
+}
+
+// parallelArrays lists header tags whose values are indexed together: every
+// tag in a group present in a header must have the same number of values as
+// the group's first tag.
+var parallelArrays = []struct {
+	what string
+	tags []int
+}{
+	{"requires", []int{1049, 1048, 1050}},
+	{"provides", []int{1047, 1112, 1113}},
+	{"conflicts", []int{1054, 1053, 1055}},
+	{"obsoletes", []int{1090, 1114, 1115}},
+	{"recommends", []int{5046, 5048, 5047}},
+	{"suggests", []int{5049, 5051, 5050}},
+	{"supplements", []int{5052, 5054, 5053}},
+	{"enhances", []int{5055, 5057, 5056}},
+	{"file list", []int{1117, 1116, 1030, 1037, 1028, 5008, 1034, 1035, 1036, 1039, 1040}},
+	{"changelog", []int{1080, 1081, 1082}},
+}
+
+// Validate reports structural inconsistencies in the package header that
+// parsing alone does not catch: a missing name, version or release, parallel
+// arrays of different lengths, and file entries whose directory index points
+// outside the directory list. Accessors tolerate all of these, so a caller
+// that publishes what it reads should call Validate first.
+func (c *Package) Validate() error {
+	for _, req := range []struct {
+		id   int
+		name string
+	}{{1000, "name"}, {1001, "version"}, {1002, "release"}} {
+		if c.Header.GetTag(req.id).String() == "" {
+			return errorf("the header has no %s", req.name)
+		}
+	}
+	for _, g := range parallelArrays {
+		want := tagLen(c.Header.GetTag(g.tags[0]))
+		for _, id := range g.tags[1:] {
+			t := c.Header.GetTag(id)
+			if t == nil {
+				continue
+			}
+			if n := tagLen(t); n != want {
+				return errorf("%s arrays disagree: tag %d has %d values, tag %d has %d", g.what, g.tags[0], want, id, n)
+			}
+		}
+	}
+	dirs := len(c.Header.GetTag(1118).StringSlice())
+	for i, ix := range c.Header.GetTag(1116).Int64Slice() {
+		if ix < 0 || ix >= int64(dirs) {
+			return errorf("file %d names directory %d, but there are only %d", i, ix, dirs)
+		}
+	}
+	return nil
+}
+
+// tagLen is the number of values a tag holds, whatever its type.
+func tagLen(t *Tag) int {
+	if t == nil {
+		return 0
+	}
+	switch v := t.Value.(type) {
+	case []string:
+		return len(v)
+	case []int64:
+		return len(v)
+	case []byte:
+		return len(v)
+	}
+	return 0
 }
 
 // String returns the package identifier in the form

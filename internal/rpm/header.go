@@ -1,12 +1,15 @@
 package rpm
 
 import (
+	"bytes"
 	"encoding/binary"
 	"io"
-	"io/ioutil"
 )
 
 const r_MaxHeaderSize = 33554432
+
+// headerMagic opens every header structure; the fourth byte is the version.
+var headerMagic = []byte{0x8E, 0xAD, 0xE8}
 
 // A Header stores metadata about an rpm package.
 type Header struct {
@@ -39,12 +42,30 @@ func (b rpmIndex) Type() TagType   { return TagType(binary.BigEndian.Uint32(b[4:
 func (b rpmIndex) Offset() int     { return int(binary.BigEndian.Uint32(b[8:12])) }
 func (b rpmIndex) ValueCount() int { return int(binary.BigEndian.Uint32(b[12:16])) }
 
+// ParseHeader decodes one header structure (magic, index and data store, with
+// no padding) from raw. It is for callers that read the header bytes
+// themselves because they also need to hash them.
+func ParseHeader(raw []byte) (*Header, error) {
+	r := bytes.NewReader(raw)
+	h, err := readHeader(r, false)
+	if err != nil {
+		return nil, err
+	}
+	if r.Len() != 0 {
+		return nil, errorf("%d bytes after the end of the header", r.Len())
+	}
+	return h, nil
+}
+
 // readHeader reads an RPM package file header structure from r.
 func readHeader(r io.Reader, pad bool) (*Header, error) {
 	// decode the header structure header
 	var hdrBytes rpmHeader
-	if _, err := r.Read(hdrBytes[:]); err != nil {
+	if _, err := io.ReadFull(r, hdrBytes[:]); err != nil {
 		return nil, err
+	}
+	if !bytes.Equal(hdrBytes.Magic(), headerMagic) {
+		return nil, errorf("bad header magic: % x", hdrBytes.Magic())
 	}
 	if hdrBytes.Size() > r_MaxHeaderSize {
 		return nil, errorf(
@@ -57,19 +78,19 @@ func readHeader(r io.Reader, pad bool) (*Header, error) {
 		return nil, errorf(
 			"header index size exceeds the maximum of %d: %d",
 			r_MaxHeaderSize,
-			hdrBytes.Size(),
+			hdrBytes.IndexCount()*len(hdrBytes),
 		)
 	}
 
 	// decode the index
 	indexBytes := make([]rpmIndex, hdrBytes.IndexCount())
 	for i := range indexBytes {
-		if _, err := r.Read(indexBytes[i][:]); err != nil {
+		if _, err := io.ReadFull(r, indexBytes[i][:]); err != nil {
 			return nil, err
 		}
 		if indexBytes[i].Offset() >= hdrBytes.Size() {
 			return nil, errorf(
-				"offset of index %d is out of range: %s",
+				"offset of index %d is out of range: %d",
 				i,
 				indexBytes[i].Offset(),
 			)
@@ -86,73 +107,51 @@ func readHeader(r io.Reader, pad bool) (*Header, error) {
 		if ix.ValueCount() < 1 {
 			return nil, errorf("invalid value count for index %d: %d", i, ix.ValueCount())
 		}
+		// Every value occupies at least one byte, so a count larger than
+		// what is left of the store is a lie. Checking before allocating
+		// keeps a forged count from claiming gigabytes of memory.
 		o := ix.Offset()
+		if ix.ValueCount() > len(buf)-o {
+			return nil, errorf("value count for index %d runs past the data store: %d", i+1, ix.ValueCount())
+		}
 		var v any
 		switch ix.Type() {
 		case TagTypeBinary, TagTypeChar, TagTypeInt8:
-			if o+ix.ValueCount() > len(buf) {
-				switch ix.Type() {
-				case TagTypeBinary:
-					return nil, errorf("binary value for index %d is out of range", i+1)
-				case TagTypeChar:
-					return nil, errorf("uint8 value for index %d is out of range", i+1)
-				case TagTypeInt8:
-					return nil, errorf("int8 value for index %d is out of range", i+1)
-				}
-				return nil, errorf("value for index %d is out of range", i+1)
-			}
 			a := make([]byte, ix.ValueCount())
 			copy(a, buf[o:o+ix.ValueCount()])
 			v = a
 
-		case TagTypeInt16:
-			a := make([]int64, ix.ValueCount())
-			for v := 0; v < ix.ValueCount(); v++ {
-				if o+2 > len(buf) {
-					return nil, errorf("int16 value for index %d is out of range", i+1)
-				}
-				a[v] = int64(binary.BigEndian.Uint16(buf[o : o+2]))
-				o += 2
+		case TagTypeInt16, TagTypeInt32, TagTypeInt64:
+			size := map[TagType]int{TagTypeInt16: 2, TagTypeInt32: 4, TagTypeInt64: 8}[ix.Type()]
+			if o%size != 0 {
+				return nil, errorf("%s value for index %d is not aligned", ix.Type(), i+1)
 			}
-			v = a
-
-		case TagTypeInt32:
-			a := make([]int64, ix.ValueCount())
-			for v := 0; v < ix.ValueCount(); v++ {
-				if o+4 > len(buf) {
-					return nil, errorf("int32 value for index %d is out of range", i+1)
-				}
-				a[v] = int64(binary.BigEndian.Uint32(buf[o : o+4]))
-				o += 4
+			if ix.ValueCount() > (len(buf)-o)/size {
+				return nil, errorf("%s value for index %d is out of range", ix.Type(), i+1)
 			}
-
-			v = a
-
-		case TagTypeInt64:
 			a := make([]int64, ix.ValueCount())
-			for v := 0; v < ix.ValueCount(); v++ {
-				if o+8 > len(buf) {
-					// TODO: better errors
-					return nil, errorf("int64 value for index %d is out of range", i+1)
+			for n := range a {
+				switch size {
+				case 2:
+					a[n] = int64(binary.BigEndian.Uint16(buf[o : o+2]))
+				case 4:
+					a[n] = int64(binary.BigEndian.Uint32(buf[o : o+4]))
+				default:
+					a[n] = int64(binary.BigEndian.Uint64(buf[o : o+8]))
 				}
-				a[v] = int64(binary.BigEndian.Uint64(buf[o : o+8]))
-				o += 8
+				o += size
 			}
 			v = a
 
 		case TagTypeString, TagTypeStringArray, TagTypeI18NString:
-			// allow at least one byte per string
-			if o+ix.ValueCount() > len(buf) {
-				return nil, errorf("[]string value for index %d is out of range", i+1)
+			if ix.Type() == TagTypeString && ix.ValueCount() != 1 {
+				return nil, errorf("string value for index %d has count %d", i+1, ix.ValueCount())
 			}
 			a := make([]string, ix.ValueCount())
-			for s := 0; s < ix.ValueCount(); s++ {
-				// calculate string length
-				var j int
-				for j = 0; (o+j) < len(buf) && buf[o+j] != 0; j++ {
-				}
-				if j == len(buf) {
-					return nil, errorf("string value for index %d is out of range", i+1)
+			for s := range a {
+				j := bytes.IndexByte(buf[o:], 0)
+				if j < 0 {
+					return nil, errorf("string value for index %d is not terminated", i+1)
 				}
 				a[s] = string(buf[o : o+j])
 				o += j + 1
@@ -166,6 +165,9 @@ func readHeader(r io.Reader, pad bool) (*Header, error) {
 			// unknown data type
 			return nil, errorf("unknown index data type: %0X", ix.Type())
 		}
+		if _, dup := tags[ix.Tag()]; dup {
+			return nil, errorf("tag %d appears more than once", ix.Tag())
+		}
 		tags[ix.Tag()] = &Tag{
 			ID:    ix.Tag(),
 			Type:  ix.Type(),
@@ -177,7 +179,7 @@ func readHeader(r io.Reader, pad bool) (*Header, error) {
 	var padding int64
 	if pad {
 		if padding = int64(8-(hdrBytes.Size()%8)) % 8; padding != 0 {
-			if _, err := io.CopyN(ioutil.Discard, r, padding); err != nil {
+			if _, err := io.CopyN(io.Discard, r, padding); err != nil {
 				return nil, err
 			}
 		}

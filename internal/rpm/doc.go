@@ -14,14 +14,22 @@ What changed from upstream:
 
   - signature.go is gone, with it GPGCheck, MD5Check, ReadKeyRing,
     OpenKeyRing and the GPGSignature type. Nothing here used them. Signature
-    verification in this project lives in pkg/rpm/sign, which shells out to
-    rpmkeys and gpg and, where it parses OpenPGP itself, uses the maintained
-    github.com/ProtonMail/go-crypto.
+    and digest verification in this project lives in pkg/rpm/pkgcheck, which
+    uses the maintained github.com/ProtonMail/go-crypto.
   - Package.GPGSignature returns the raw tag bytes instead of the removed
     GPGSignature type.
   - cmd/rpmdump and cmd/rpminfo are not copied.
   - gofumpt rewrote one octal literal, 0777 to 0o777, because the repository
     gates on gofumpt over the whole tree.
+  - Header parsing is hardened against hostile input, since packages arrive
+    from anywhere: header magic is checked; short reads are errors; a value
+    count is checked against the data store before anything is allocated for
+    it; integer values must be aligned; a string must be NUL-terminated
+    inside the store; a STRING has a count of one; a tag may appear only
+    once. ParseHeader and ParseLead expose the parsers to callers that read
+    the bytes themselves (to hash them).
+  - Dependency accessors no longer index past the end of a short parallel
+    array (upstream panics), and Package.Validate reports such headers.
 
 Everything else is upstream, unmodified, so that a future upstream release
 can be diffed against it. .golangci.yml excludes this directory for the same

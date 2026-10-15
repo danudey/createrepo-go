@@ -112,10 +112,7 @@ func (r *Repo) RelocateAll(prefix string) int {
 // and size from the new file contents, so the regenerated metadata reflects the
 // re-signed RPM.
 func (r *Repo) ReplaceFromFile(localPath, location string) (*repodata.Package, error) {
-	pkg, err := rpmmeta.FromFile(localPath, rpmmeta.Options{
-		ChecksumType:   r.opt.checksumType(),
-		ChangelogLimit: r.opt.ChangelogLimit,
-	})
+	pkg, err := rpmmeta.FromFile(localPath, r.packageOptions())
 	if err != nil {
 		return nil, err
 	}

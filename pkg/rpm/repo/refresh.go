@@ -88,10 +88,7 @@ func (r *Repo) RefreshFromPackages(ctx context.Context, opt RefreshOptions) (*Re
 			res.BytesRead += size
 		}
 
-		fresh, err := rpmmeta.FromFile(local, rpmmeta.Options{
-			ChecksumType:   r.opt.checksumType(),
-			ChangelogLimit: r.opt.ChangelogLimit,
-		})
+		fresh, err := rpmmeta.FromFile(local, r.packageOptions())
 		cleanup()
 		if err != nil {
 			res.Unreadable = append(res.Unreadable, fmt.Sprintf("%s: %v", old.Location, err))

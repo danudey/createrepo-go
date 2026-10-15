@@ -138,17 +138,43 @@ func ReadAll(ctx context.Context, be backend.Backend, relpath string) ([]byte, e
 // number of bytes read. Nothing is buffered: a package of any size costs one
 // pass and no disk.
 func HashObject(ctx context.Context, be backend.Backend, relpath string, item *progress.Item) (string, int64, error) {
+	return HashObjectWith(ctx, be, relpath, item, nil)
+}
+
+// HashObjectWith is HashObject that also hands the bytes to inspect as they
+// stream past, so a caller that needs to look inside the object pays for one
+// transfer, not two. inspect may stop reading early; the rest is still hashed.
+// A nil inspect is HashObject.
+func HashObjectWith(ctx context.Context, be backend.Backend, relpath string, item *progress.Item, inspect func(io.Reader) error) (string, int64, error) {
 	rc, err := be.Get(ctx, relpath)
 	if err != nil {
 		return "", 0, err
 	}
 	defer rc.Close()
 	h := sha256.New()
-	n, err := io.Copy(item.Writer(h), rc)
-	if err != nil {
-		return "", n, err
+	cw := &countWriter{w: item.Writer(h)}
+	src := io.TeeReader(rc, cw)
+	if inspect != nil {
+		if err := inspect(src); err != nil {
+			return "", cw.n, err
+		}
 	}
-	return hex.EncodeToString(h.Sum(nil)), n, nil
+	if _, err := io.Copy(io.Discard, src); err != nil {
+		return "", cw.n, err
+	}
+	return hex.EncodeToString(h.Sum(nil)), cw.n, nil
+}
+
+// countWriter counts the bytes written through it.
+type countWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
 }
 
 // ServerCopy duplicates from to to within be without moving the bytes through

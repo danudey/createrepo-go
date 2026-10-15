@@ -36,6 +36,13 @@ repository if it does not yet exist.
   Superseded metadata **and any RPM the new metadata no longer references**
   (replaced, pruned, removed, or relocated) are then garbage-collected — the
   publish diffs the old and new metadata, so orphaned files never accumulate.
+- **Damaged packages are refused.** Every RPM is checked against its own
+  header and payload digests and signatures before it is signed, uploaded or
+  indexed, so a truncated or corrupted package never reaches the metadata, and
+  is never given a signature that vouches for it. Text the XML metadata cannot
+  hold is handled as `createrepo_c` handles it: a string that is not valid
+  UTF-8 is read as Latin-1 and converted, and a package carrying a control
+  character is refused.
 
 Only RHEL 8+ is targeted: no sqlite metadata (dnf does not use it), and gzip is
 the default metadata compression (zstd is available with `--compression zstd`,
@@ -136,7 +143,8 @@ keep working.)
 
 --sign-metadata           GPG-sign repomd.xml -> repomd.xml.asc
 --sign-packages           rpmsign the RPMs before upload
---verify-sigs --keyring K verify each RPM's signature before adding
+--verify-sigs --keyring K verify each RPM's signature before adding, as the
+                          --target release's rpm would (natively; no rpm needed)
 --gpg-key FILE            private key file (signing)
 --gpg-key-id ID           key id/uid from the local keyring (signing)
 --gpg-passphrase / $CREATEREPO_GPG_PASSPHRASE
@@ -591,14 +599,21 @@ createrepo-go add /srv/repo dist/*.rpm
 ## Verifying a repository (`verify`)
 
 `verify` checks that every RPM the metadata references is present with the size
-and checksum the metadata records, and that the repository's intra-repository
-dependencies are satisfied. It modifies nothing.
+and checksum the metadata records, that each RPM is intact and its signatures
+sound, that the packages and `repomd.xml` are signed as the repository requires,
+and that the repository's intra-repository dependencies are satisfied. It
+modifies nothing.
 
 ```sh
 createrepo-go verify /srv/repo
 # OK: 42 package(s) present with the expected size; checksums: 42 verified from
 # content; dependencies satisfied
+# packages: 42 intact (header and payload digests checked); signatures: 42 signed
+# by B29070C0BBA03456860DBA5C260B206AE739E175 (verified against a trusted key)
+# repomd.xml: signed by B29070C0BBA03456860DBA5C260B206AE739E175 (verified against a trusted key)
 ```
+
+### Checksums
 
 How far the checksum check gets depends on what the backend can prove without
 transferring the object:
@@ -622,17 +637,81 @@ The summary always states which of the three applied, so an unproved checksum is
 never reported as though it had been verified, and a run with anything left
 unconfirmed says so and points at `--checksums`.
 
-```
---checksums          hash every RPM's content, downloading where necessary
---concurrency N      packages to check in parallel (default 6)
-```
-
 `verify` reports the estimated download volume before starting a `--checksums`
 run against a backend that cannot hash in place. Nothing is written to disk:
 each RPM is hashed as it streams past.
 
-For a deeper sweep that also validates the metadata index files themselves and
-the RPMs' internal header/payload digests, use `check --level fetch` below.
+### Package contents
+
+A matching checksum proves the file is the one the metadata describes, not that
+the file is sound: metadata generated from a damaged package agrees with it.
+So every RPM is also checked against itself — that it parses, that its header
+and payload digests match, and that every signature it carries matches what it
+signs. This needs no `rpm` installation.
+
+How much of each package is read depends, again, on the backend:
+
+| Backend | What is read |
+|---------|--------------|
+| local disk | The whole file: header and payload digests are checked. |
+| S3, GCS, SFTP, HTTP(S) | The header only (a few KB per package), which holds the header digests and signatures. With `--checksums` the downloaded file is checked in full, in the same pass that hashes it. |
+
+`--skip-package-contents` turns this off, for a quick presence check of a
+large remote repository.
+
+### Signatures
+
+Signatures are checked whenever they are present, with no flag needed:
+
+- **Integrity.** A signature that does not match the package or `repomd.xml`
+  it signs (damaged, or copied from another package) is always a problem. This
+  needs no key.
+- **Trust.** Signatures are verified against trusted keys from `--keyring`,
+  or, failing that, the signing key `createrepo-go.json` records, exported from
+  the local GnuPG keyring. Without either, `verify` still identifies who signed
+  each package, but cannot prove it.
+- **One key.** Every package must be signed by the same key. A package signed
+  by another key, or an unsigned package in a signed repository, is a problem.
+  When the config records a signing key, that key is the one every package
+  and `repomd.xml` must be signed by.
+- **The target's rules.** Signatures are judged as the `--target` release's
+  rpm judges them (the recorded target by default). RHEL 8 and 9 cannot read
+  the rpm 6 `OPENPGP` signature, so a package signed only that way is unsigned
+  to their clients (a warning, or a problem when signatures are required).
+  RHEL 9 and later refuse SHA-1 and DSA signatures and RSA keys under 2048
+  bits, so such a signature is a problem for those targets.
+
+Three flags make the checks stricter:
+
+```
+--require-trusted          every signature must verify against a trusted key
+--require-signed-packages  every RPM must carry a signature the target accepts
+                           (implied when the config records sign_packages)
+--require-signed-metadata  repomd.xml must be signed (implied when the config
+                           records sign_metadata)
+```
+
+```sh
+# Prove that a repository is signed, end to end, by the key we publish.
+createrepo-go verify https://downloads.example.com/el9 --target rhel9 \
+    --keyring RPM-GPG-KEY-example --require-trusted \
+    --require-signed-packages --require-signed-metadata
+```
+
+### Flags
+
+```
+--checksums                hash every RPM's content, downloading where necessary
+--concurrency N            packages to check in parallel (default 6)
+--keyring FILE             trusted public keys (repeatable)
+--require-trusted          fail unless every signature verifies against a trusted key
+--require-signed-packages  fail unless every RPM is signed in a way the target accepts
+--require-signed-metadata  fail unless repomd.xml is signed
+--skip-package-contents    do not read the RPMs (no digest or signature checks)
+```
+
+For a deeper sweep that also validates the metadata index files themselves,
+use `check --level fetch` below.
 
 ## Validating a repository (`check`)
 

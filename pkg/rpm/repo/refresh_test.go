@@ -9,18 +9,19 @@ import (
 	"github.com/danudey/createrepo-go/pkg/backend"
 )
 
-// appendByte changes a file's content and length while leaving it a parseable
-// RPM, standing in for a package rebuilt and republished under the same name.
-func appendByte(t *testing.T, path string) {
+// republishInPlace changes a file's content while leaving it a valid RPM, standing
+// in for a package rebuilt and republished under the same name. It rewrites
+// the lead's reserved bytes, which no digest or signature covers: anything
+// that touched the header or payload would make the package damaged, and the
+// integrity check would rightly refuse it.
+func republishInPlace(t *testing.T, path string) {
 	t.Helper()
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.Write([]byte{0}); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
+	data[95] ^= 0xff // the last reserved byte of the 96-byte lead
+	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -38,7 +39,7 @@ func reopen(t *testing.T, be backend.Backend) *Repo {
 func TestRefreshCorrectsMetadataThatNoLongerMatchesTheFile(t *testing.T) {
 	dir, ids := verifiableRepo(t)
 	path := rpmPath(t, dir, ids, "hello")
-	appendByte(t, path)
+	republishInPlace(t, path)
 
 	be, err := backend.Open(context.Background(), dir)
 	if err != nil {
@@ -218,7 +219,7 @@ func TestRefreshLeavesMissingPackagesAsPublished(t *testing.T) {
 
 func TestRefreshDownloadsWhenPackagesAreNotLocalFiles(t *testing.T) {
 	dir, ids := verifiableRepo(t)
-	appendByte(t, rpmPath(t, dir, ids, "hello"))
+	republishInPlace(t, rpmPath(t, dir, ids, "hello"))
 
 	local, err := backend.Open(context.Background(), dir)
 	if err != nil {
@@ -252,7 +253,7 @@ func TestRefreshDownloadsWhenPackagesAreNotLocalFiles(t *testing.T) {
 
 func TestRefreshKeepsLocationAndBaseURL(t *testing.T) {
 	dir, ids := verifiableRepo(t)
-	appendByte(t, rpmPath(t, dir, ids, "hello"))
+	republishInPlace(t, rpmPath(t, dir, ids, "hello"))
 
 	be, err := backend.Open(context.Background(), dir)
 	if err != nil {

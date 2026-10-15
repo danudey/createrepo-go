@@ -15,8 +15,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/danudey/createrepo-go/internal/rpm"
+	"github.com/danudey/createrepo-go/pkg/rpm/pkgcheck"
 	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
 )
 
@@ -47,6 +49,10 @@ type Options struct {
 	// ChangelogLimit caps the number of most-recent changelog entries kept.
 	// Zero means keep all.
 	ChangelogLimit int
+	// CheckIntegrity refuses a package whose digests or signatures do not
+	// match its content (see pkgcheck). It costs nothing extra: the check
+	// runs in the pass that computes the package checksum.
+	CheckIntegrity bool
 }
 
 // DefaultOptions returns sensible defaults (sha256, last 10 changelogs).
@@ -77,16 +83,31 @@ func FromFile(path string, opt Options) (*repodata.Package, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read rpm %s: %w", path, err)
 	}
+	if err := pkg.Validate(); err != nil {
+		return nil, fmt.Errorf("read rpm %s: %w", path, err)
+	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
 	h := sha256.New()
+	if opt.CheckIntegrity {
+		res, err := pkgcheck.Check(io.TeeReader(f, h), pkgcheck.Options{})
+		if err != nil {
+			return nil, err
+		}
+		if !res.OK() {
+			return nil, fmt.Errorf("%s is damaged: %w", path, res.Err())
+		}
+	}
 	if _, err := io.Copy(h, f); err != nil {
 		return nil, err
 	}
 	sum := hex.EncodeToString(h.Sum(nil))
 
-	out := convert(pkg, opt)
+	out, err := convert(pkg, opt)
+	if err != nil {
+		return nil, fmt.Errorf("read rpm %s: %w", path, err)
+	}
 	out.ChecksumType = opt.ChecksumType
 	out.PkgID = sum
 	out.SizePackage = fi.Size()
@@ -105,8 +126,9 @@ func baseName(p string) string {
 }
 
 // convert maps a parsed rpm.Package into our metadata model (everything that
-// does not require the file's stat info or checksum).
-func convert(pkg *rpm.Package, opt Options) *repodata.Package {
+// does not require the file's stat info or checksum), refusing text the
+// metadata cannot hold.
+func convert(pkg *rpm.Package, opt Options) (*repodata.Package, error) {
 	start, end := pkg.HeaderRange()
 	p := &repodata.Package{
 		Name:        pkg.Name(),
@@ -135,7 +157,67 @@ func convert(pkg *rpm.Package, opt Options) *repodata.Package {
 		Files:       files(pkg),
 		Changelogs:  changelogs(pkg, opt.ChangelogLimit),
 	}
-	return p
+	return p, cleanText(p)
+}
+
+// cleanText makes every string headed for the XML metadata representable
+// there, the way createrepo_c does: text that is not valid UTF-8 is read as
+// Latin-1 (the encoding old packages used) and converted, and a package
+// carrying a control character XML cannot hold at all is refused rather than
+// published in a primary.xml no client can parse.
+func cleanText(p *repodata.Package) error {
+	var bad error
+	fix := func(field string, s *string) {
+		if !utf8.ValidString(*s) {
+			*s = latin1ToUTF8(*s)
+		}
+		if i := strings.IndexFunc(*s, forbiddenInXML); i >= 0 && bad == nil {
+			r, _ := utf8.DecodeRuneInString((*s)[i:])
+			bad = fmt.Errorf("the package %s contains the control character %U, which XML cannot represent (createrepo_c refuses such packages too)", field, r)
+		}
+	}
+	for field, s := range map[string]*string{
+		"name": &p.Name, "arch": &p.Arch, "version": &p.Version, "release": &p.Release,
+		"summary": &p.Summary, "description": &p.Description, "packager": &p.Packager,
+		"URL": &p.URL, "license": &p.License, "vendor": &p.Vendor, "group": &p.Group,
+		"build host": &p.BuildHost, "source RPM": &p.SourceRPM,
+	} {
+		fix(field, s)
+	}
+	for _, list := range []struct {
+		what    string
+		entries []repodata.Entry
+	}{{"provides", p.Provides}, {"requires", p.Requires}, {"conflicts", p.Conflicts}, {"obsoletes", p.Obsoletes}} {
+		for i := range list.entries {
+			e := &list.entries[i]
+			fix(list.what+" entries", &e.Name)
+			fix(list.what+" entries", &e.Ver)
+			fix(list.what+" entries", &e.Rel)
+		}
+	}
+	for i := range p.Files {
+		fix("file list", &p.Files[i].Path)
+	}
+	for i := range p.Changelogs {
+		fix("changelog", &p.Changelogs[i].Author)
+		fix("changelog", &p.Changelogs[i].Text)
+	}
+	return bad
+}
+
+// forbiddenInXML reports a character XML 1.0 does not allow in a document.
+func forbiddenInXML(r rune) bool {
+	return (r < 0x20 && r != '\t' && r != '\n' && r != '\r') || r == 0xFFFE || r == 0xFFFF
+}
+
+// latin1ToUTF8 reads s as ISO-8859-1, in which every byte is the code point
+// of the same value.
+func latin1ToUTF8(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		b.WriteRune(rune(s[i]))
+	}
+	return b.String()
 }
 
 // clampInt64 converts a size reported by the rpm header to the signed type

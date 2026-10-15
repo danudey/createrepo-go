@@ -67,6 +67,17 @@ type Options struct {
 	now int64
 }
 
+// packageOptions is how the repository reads an RPM it is about to index. The
+// integrity check means a damaged package, or one whose signature does not
+// match it, never reaches the metadata.
+func (r *Repo) packageOptions() rpmmeta.Options {
+	return rpmmeta.Options{
+		ChecksumType:   r.opt.checksumType(),
+		ChangelogLimit: r.opt.ChangelogLimit,
+		CheckIntegrity: true,
+	}
+}
+
 func (o *Options) checksumType() string {
 	if o.ChecksumType == "" {
 		return "sha256"
@@ -234,10 +245,7 @@ func (r *Repo) MetadataDocument(ctx context.Context, typ string) ([]byte, error)
 // for upload. A package with the same name+arch+EVR already present is treated
 // as an update (superseded). With PruneOlder, older versions are also removed.
 func (r *Repo) AddRPM(localPath string) (*repodata.Package, error) {
-	pkg, err := rpmmeta.FromFile(localPath, rpmmeta.Options{
-		ChecksumType:   r.opt.checksumType(),
-		ChangelogLimit: r.opt.ChangelogLimit,
-	})
+	pkg, err := rpmmeta.FromFile(localPath, r.packageOptions())
 	if err != nil {
 		return nil, err
 	}

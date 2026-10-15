@@ -58,6 +58,11 @@ supports it.`,
 					return err
 				}
 				defer v.Close()
+				// Judge the signatures as the target's rpm will, not as
+				// whatever rpm this machine has.
+				if v.Policy, err = targetPolicy(); err != nil {
+					return err
+				}
 				for _, p := range rpms {
 					if err := v.VerifyFile(p); err != nil {
 						return err

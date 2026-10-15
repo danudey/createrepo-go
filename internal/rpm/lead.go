@@ -57,3 +57,8 @@ func readLead(r io.Reader) (*Lead, error) {
 		SignatureType:   lead.SignatureType(),
 	}, nil
 }
+
+// ParseLead decodes the 96-byte lead at the start of b.
+func ParseLead(b []byte) (*Lead, error) {
+	return readLead(bytes.NewReader(b))
+}

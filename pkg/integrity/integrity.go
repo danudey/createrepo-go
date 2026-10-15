@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -120,16 +121,25 @@ func (t *Tally) Add(o Tally) {
 // account for progress only for the transfers that happen; the item it returns
 // is finished before Check returns. item may be nil.
 func Check(ctx context.Context, be backend.Backend, f File, mode Mode, w Wording, item func() *progress.Item) (details []string, t Tally) {
+	details, t, _ = CheckInspect(ctx, be, f, mode, w, item, nil)
+	return details, t
+}
+
+// CheckInspect is Check that also passes the file's content to inspect
+// whenever Check has to read it anyway (a content check against a backend that
+// cannot hash in place), and reports whether it did. A caller that needs to
+// look inside the file reads it itself only when inspected is false.
+func CheckInspect(ctx context.Context, be backend.Backend, f File, mode Mode, w Wording, item func() *progress.Item, inspect func(io.Reader) error) (details []string, t Tally, inspected bool) {
 	fail := func(d string) { details = append(details, d) }
 
 	fi, err := be.Stat(ctx, f.Location)
 	switch {
 	case errors.Is(err, backend.ErrNotExist):
 		fail(w.Missing)
-		return details, t
+		return details, t, inspected
 	case err != nil:
 		fail("stat failed: " + err.Error())
-		return details, t
+		return details, t, inspected
 	}
 	if f.Size > 0 && fi.Size != f.Size {
 		fail(fmt.Sprintf("size %d does not match the %d %s records", fi.Size, f.Size, w.Records))
@@ -139,7 +149,7 @@ func Check(ctx context.Context, be backend.Backend, f File, mode Mode, w Wording
 
 	if f.SHA256 == "" {
 		t.Unconfirmed++
-		return details, t
+		return details, t, inspected
 	}
 
 	// Content is authoritative. Use the backend's own hash only when it is
@@ -149,14 +159,14 @@ func Check(ctx context.Context, be backend.Backend, f File, mode Mode, w Wording
 		switch {
 		case err != nil && !errors.Is(err, backend.ErrNotExist):
 			fail("checksum could not be computed: " + err.Error())
-			return details, t
+			return details, t, inspected
 		case ok:
 			if !strings.EqualFold(sum, f.SHA256) {
 				fail(fmt.Sprintf("content checksum %s does not match %s", sum, w.recorded(f.SHA256)))
 			} else {
 				t.Verified++
 			}
-			return details, t
+			return details, t, inspected
 		}
 		// ok == false: the backend could not answer after all; fall through.
 	}
@@ -168,7 +178,7 @@ func Check(ctx context.Context, be backend.Backend, f File, mode Mode, w Wording
 			sum, ok, err := hasher.Hash(ctx, f.Location, backend.AlgoSHA256)
 			if err != nil && !errors.Is(err, backend.ErrNotExist) {
 				fail("recorded checksum could not be read: " + err.Error())
-				return details, t
+				return details, t, inspected
 			}
 			if ok {
 				if !strings.EqualFold(sum, f.SHA256) {
@@ -176,11 +186,11 @@ func Check(ctx context.Context, be backend.Backend, f File, mode Mode, w Wording
 				} else {
 					t.Recorded++
 				}
-				return details, t
+				return details, t, inspected
 			}
 		}
 		t.Unconfirmed++
-		return details, t
+		return details, t, inspected
 	}
 
 	// Content mode against a backend that cannot hash for us: read the object.
@@ -188,21 +198,22 @@ func Check(ctx context.Context, be backend.Backend, f File, mode Mode, w Wording
 	if item != nil {
 		it = item()
 	}
-	sum, n, err := xfer.HashObject(ctx, be, f.Location, it)
+	sum, n, err := xfer.HashObjectWith(ctx, be, f.Location, it, inspect)
 	it.Done()
+	inspected = inspect != nil && err == nil
 	t.Downloaded++
 	t.BytesRead += n
 	if err != nil {
 		fail(fmt.Sprintf("reading %s to check its checksum: %v", w.Object, err))
-		return details, t
+		return details, t, inspected
 	}
 	if f.Size > 0 && n != f.Size {
 		fail(fmt.Sprintf("read %d bytes, but %s records a size of %d", n, w.Records, f.Size))
 	}
 	if !strings.EqualFold(sum, f.SHA256) {
 		fail(fmt.Sprintf("content checksum %s does not match %s", sum, w.recorded(f.SHA256)))
-		return details, t
+		return details, t, inspected
 	}
 	t.Verified++
-	return details, t
+	return details, t, inspected
 }
