@@ -13,6 +13,7 @@ import (
 
 	"github.com/danudey/createrepo-go/pkg/backend"
 	"github.com/danudey/createrepo-go/pkg/progress"
+	"github.com/danudey/createrepo-go/pkg/rpm/pkgcheck"
 	"github.com/danudey/createrepo-go/pkg/rpm/repo"
 	"github.com/danudey/createrepo-go/pkg/rpm/sign"
 )
@@ -143,7 +144,7 @@ never downloaded.`,
 	pf.StringVar(&gf.gpgKeyID, "gpg-key-id", "", "GPG key id/uid from the local keyring (for signing)")
 	pf.StringVar(&gf.gpgPass, "gpg-passphrase", os.Getenv("CREATEREPO_GPG_PASSPHRASE"), "passphrase for the signing key (or set CREATEREPO_GPG_PASSPHRASE)")
 	pf.BoolVar(&gf.gpgNoPrompt, "gpg-no-prompt", cli.EnvBool("CREATEREPO_GPG_NO_PROMPT"), "never let gpg ask for a key passphrase while signing; fail instead of prompting (or set CREATEREPO_GPG_NO_PROMPT=1). Use this in CI, where a prompt hangs the job")
-	pf.StringArrayVar(&gf.keyrings, "keyring", nil, "public keyring file for --verify-sigs (repeatable)")
+	pf.StringArrayVar(&gf.keyrings, "keyring", nil, "public keyring file of trusted keys, for --verify-sigs, copy and verify (repeatable)")
 
 	root.AddCommand(addCmd(), removeCmd(), rebuildCmd(), copyCmd(), createCmd(), takeoverCmd(), listCmd(), verifyCmd(), checkCmd())
 	return root
@@ -186,6 +187,23 @@ func validateSigningFlags() error {
 	return nil
 }
 
+// canonicalTarget maps a --target value, or an alias of one, to its profile
+// key ("rhel8", …). An unknown value is returned lowercased, for the caller's
+// validation to reject.
+func canonicalTarget(target string) string {
+	key := strings.ToLower(target)
+	if canon, ok := profileAliases[key]; ok {
+		return canon
+	}
+	return key
+}
+
+// targetPolicy is the package-signature policy of the effective --target:
+// what that release's rpm reads and refuses.
+func targetPolicy() (pkgcheck.Policy, error) {
+	return pkgcheck.PolicyFor(canonicalTarget(gf.target))
+}
+
 // applyProfile resolves --target into defaults for compression and signature
 // format. Flags the user set explicitly are left untouched.
 func applyProfile(cmd *cobra.Command, _ []string) error {
@@ -207,10 +225,7 @@ func resolveProfile(target, compression, signature string, compressionSet, signa
 	if target == "" {
 		return compression, signature, nil
 	}
-	key := strings.ToLower(target)
-	if canon, ok := profileAliases[key]; ok {
-		key = canon
-	}
+	key := canonicalTarget(target)
 	p, ok := profiles[key]
 	if !ok {
 		return compression, signature, fmt.Errorf("unknown --target %q (valid: rhel8, rhel9, rhel10 and aliases)", target)

@@ -53,9 +53,10 @@ Releases publish signed archives of each binary for every supported platform.
 | `pkg/compress` | shared: in-process decoding of gzip, zstd, xz and bzip2 metadata |
 | `pkg/configfile` | shared: load and save the per-repository JSON config |
 | `internal/cli`, `internal/parallel` | shared: command-line plumbing and a bounded worker pool |
-| `pkg/rpm/*` | rpm-md: `repodata` (data model and XML), `rpmmeta` (read an RPM), `repo` (load, mutate, publish), `repocheck`, `repoconfig`, `sign`, `takeover` |
+| `pkg/rpm/*` | rpm-md: `repodata` (data model and XML), `rpmmeta` (read an RPM), `pkgcheck` (check an RPM's digests and signatures natively, per target release), `repo` (load, mutate, publish, verify), `repocheck`, `repoconfig`, `sign`, `takeover` |
 | `pkg/apt/*` | apt: `aptdata` (deb822 model, `Packages`/`Sources`/`Release`, version comparison, layout), `debmeta` (read a `.deb` or `.dsc`), `repo`, `repocheck`, `repoconfig`, `sign` |
-| `internal/rpm` | a vendored copy of `github.com/cavaliergopher/rpm` (see its `doc.go`) |
+| `internal/rpm` | a vendored copy of `github.com/cavaliergopher/rpm`, hardened (see its `doc.go`) |
+| `internal/rpmtest` | builds signed and precisely damaged RPMs for tests, without rpmbuild or rpmsign |
 | `reference/rpm`, `reference/apt` | test fixtures and the scripts that generate them |
 | `test/e2e/rpm`, `test/e2e/apt` | end-to-end suites |
 

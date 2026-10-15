@@ -17,14 +17,14 @@ func republish(t *testing.T, dir, name string) {
 	if err != nil || len(matches) != 1 {
 		t.Fatalf("expected one %s package in %s, found %v (%v)", name, dir, matches, err)
 	}
-	f, err := os.OpenFile(matches[0], os.O_APPEND|os.O_WRONLY, 0o644)
+	// The lead's reserved bytes are covered by no digest or signature, so the
+	// package changes and stays valid.
+	data, err := os.ReadFile(matches[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.Write([]byte{0}); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
+	data[95] ^= 0xff
+	if err := os.WriteFile(matches[0], data, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }

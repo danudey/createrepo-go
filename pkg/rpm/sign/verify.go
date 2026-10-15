@@ -1,24 +1,26 @@
 package sign
 
 import (
-	"bufio"
-	"bytes"
 	"fmt"
-	"os"
-	"os/exec"
 	"strings"
+
+	"github.com/ProtonMail/go-crypto/openpgp"
+
+	"github.com/danudey/createrepo-go/pkg/gpg"
+	"github.com/danudey/createrepo-go/pkg/rpm/pkgcheck"
 )
 
 // Verifier checks RPM package signatures against a set of trusted public keys.
 //
-// Verification delegates to the system rpmkeys with an isolated temporary rpm
-// keyring (a private --dbpath, so the host rpm database is never touched and no
-// privileges are required). This is the robust path: rpmkeys understands every
-// signature and payload-digest variant current rpm produces, which pure-Go
-// libraries do not yet fully cover.
+// Verification is native (see pkgcheck), so it needs no rpm installation and
+// gives the same answer on every host. Policy says which release's rules to
+// apply: a package signed only with the rpm 6 OPENPGP tag is unsigned to the
+// rpm on RHEL 8 and 9, whatever the rpm on the machine running this tool reads.
 type Verifier struct {
-	dbpath  string
-	cleanup func()
+	keyring openpgp.EntityList
+	// Policy is the release whose rules signatures are judged by. The zero
+	// value accepts every signature format.
+	Policy pkgcheck.Policy
 }
 
 // NewVerifier builds a verifier trusting the public keys in the given armored
@@ -27,59 +29,53 @@ func NewVerifier(keyringPaths ...string) (*Verifier, error) {
 	if len(keyringPaths) == 0 {
 		return nil, fmt.Errorf("--verify-sigs requires at least one --keyring")
 	}
-	db, err := os.MkdirTemp("", "cr-rpmdb-*")
+	kr, err := gpg.LoadKeyring(keyringPaths...)
 	if err != nil {
 		return nil, err
 	}
-	cleanup := func() { os.RemoveAll(db) }
-	for _, p := range keyringPaths {
-		cmd := exec.Command("rpmkeys", "--dbpath", db, "--import", p)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			cleanup()
-			return nil, fmt.Errorf("import keyring %s: %w: %s", p, err, out)
-		}
-	}
-	return &Verifier{dbpath: db, cleanup: cleanup}, nil
+	return &Verifier{keyring: kr}, nil
 }
 
-// Close removes the temporary keyring.
-func (v *Verifier) Close() {
-	if v.cleanup != nil {
-		v.cleanup()
-	}
-}
+// Close releases the verifier. It holds nothing today; it is kept so callers
+// need not change if verification ever needs resources again.
+func (v *Verifier) Close() {}
 
-// VerifyFile requires that the RPM at path carry at least one signature made by
-// a trusted key. An unsigned package, a bad signature, or a signature from an
-// unknown key (NOKEY) is rejected.
+// VerifyFile requires that the RPM at path be intact and carry at least one
+// signature, readable on the policy's release, made by a trusted key. An
+// unsigned package, a damaged one, a bad signature, or a signature from an
+// unknown key (rpm's NOKEY) is rejected.
 func (v *Verifier) VerifyFile(path string) error {
-	cmd := exec.Command("rpmkeys", "--dbpath", v.dbpath, "-Kv", path)
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	runErr := cmd.Run()
-
-	good := false
-	sc := bufio.NewScanner(&buf)
-	for sc.Scan() {
-		line := strings.ToLower(strings.TrimSpace(sc.Text()))
-		if !strings.Contains(line, "signature") {
-			continue
-		}
+	res, err := pkgcheck.CheckFile(path, pkgcheck.Options{Keyring: v.keyring, Policy: v.Policy})
+	if err != nil {
+		return fmt.Errorf("verify %s: %w", path, err)
+	}
+	if !res.OK() {
+		return fmt.Errorf("verify %s: bad signature or damaged package: %w", path, res.Err())
+	}
+	var untrusted, unreadable []string
+	for _, s := range res.Signatures {
 		switch {
-		case strings.Contains(line, "nokey"):
-			return fmt.Errorf("verify %s: signed by an untrusted key (%s)", path, strings.TrimSpace(sc.Text()))
-		case strings.Contains(line, "bad") || strings.Contains(line, "not ok"):
-			return fmt.Errorf("verify %s: bad signature (%s)", path, strings.TrimSpace(sc.Text()))
-		case strings.HasSuffix(line, ": ok") || strings.HasSuffix(line, " ok"):
-			good = true
+		case s.Counts() && s.Status == pkgcheck.StatusGood:
+			return nil
+		case s.Counts():
+			untrusted = append(untrusted, s.Signer())
+		case !s.Readable:
+			unreadable = append(unreadable, s.Tag)
 		}
 	}
-	if good {
-		return nil
+	switch {
+	case len(untrusted) > 0:
+		return fmt.Errorf("verify %s: signed by an untrusted key (%s)", path, strings.Join(untrusted, ", "))
+	case len(unreadable) > 0:
+		return fmt.Errorf("verify %s: carries only an %s signature, which %s cannot read, so it installs there as unsigned; sign it with --signature-format v4",
+			path, strings.Join(unreadable, "/"), policyName(v.Policy))
 	}
-	if runErr != nil {
-		return fmt.Errorf("verify %s: %w: %s", path, runErr, strings.TrimSpace(buf.String()))
+	return fmt.Errorf("verify %s: no trusted signature (package unsigned)", path)
+}
+
+func policyName(p pkgcheck.Policy) string {
+	if p.Target == "" {
+		return "the target's rpm"
 	}
-	return fmt.Errorf("verify %s: no trusted signature (package unsigned or signed by an unknown key)", path)
+	return p.Target
 }

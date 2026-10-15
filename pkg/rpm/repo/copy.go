@@ -416,10 +416,7 @@ func (r *Repo) addCopied(p *repodata.Package, loc string, opt PackageCopyOptions
 // indexes it at loc. It is used when the copy rewrites the package (signing) or
 // when the caller asked for the metadata to be rebuilt from the packages.
 func (r *Repo) addFromFile(localPath, loc string, opt PackageCopyOptions) (*repodata.Package, error) {
-	pkg, err := rpmmeta.FromFile(localPath, rpmmeta.Options{
-		ChecksumType:   r.opt.checksumType(),
-		ChangelogLimit: r.opt.ChangelogLimit,
-	})
+	pkg, err := rpmmeta.FromFile(localPath, r.packageOptions())
 	if err != nil {
 		return nil, err
 	}

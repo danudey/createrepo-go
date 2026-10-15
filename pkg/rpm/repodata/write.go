@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"strconv"
+	"unicode/utf8"
 )
 
 const xmlDecl = `<?xml version="1.0" encoding="UTF-8"?>` + "\n"
@@ -14,20 +15,7 @@ func escapeText(s string) string {
 	if !needsEscape(s, false) {
 		return s
 	}
-	var b bytes.Buffer
-	for _, r := range s {
-		switch r {
-		case '&':
-			b.WriteString("&amp;")
-		case '<':
-			b.WriteString("&lt;")
-		case '>':
-			b.WriteString("&gt;")
-		default:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
+	return escape(s, false)
 }
 
 // escapeAttr escapes a value destined for a double-quoted attribute.
@@ -35,17 +23,31 @@ func escapeAttr(s string) string {
 	if !needsEscape(s, true) {
 		return s
 	}
+	return escape(s, true)
+}
+
+// escape writes s as XML. Packages are vetted when they are read (see
+// rpmmeta), but metadata also arrives from elsewhere, so the writer never
+// trusts its input to be representable: invalid UTF-8 and characters XML 1.0
+// forbids become U+FFFD rather than a document no parser accepts. A carriage
+// return, and in an attribute a tab or newline, is written as a character
+// reference, because a parser would otherwise normalize it away.
+func escape(s string, attr bool) string {
 	var b bytes.Buffer
 	for _, r := range s {
-		switch r {
-		case '&':
+		switch {
+		case r == '&':
 			b.WriteString("&amp;")
-		case '<':
+		case r == '<':
 			b.WriteString("&lt;")
-		case '>':
+		case r == '>':
 			b.WriteString("&gt;")
-		case '"':
+		case r == '"' && attr:
 			b.WriteString("&quot;")
+		case r == '\r' || (attr && (r == '\t' || r == '\n')):
+			fmt.Fprintf(&b, "&#%d;", r)
+		case !xmlChar(r):
+			b.WriteRune(utf8.RuneError)
 		default:
 			b.WriteRune(r)
 		}
@@ -55,16 +57,33 @@ func escapeAttr(s string) string {
 
 func needsEscape(s string, attr bool) bool {
 	for _, r := range s {
-		switch r {
-		case '&', '<', '>':
+		switch {
+		case r == '&', r == '<', r == '>', r == '\r':
 			return true
-		case '"':
-			if attr {
-				return true
-			}
+		case attr && (r == '"' || r == '\t' || r == '\n'):
+			return true
+		case r == utf8.RuneError:
+			// Either a literal U+FFFD or a byte that is not UTF-8. Only
+			// the latter needs replacing, but escape treats both alike.
+			return true
+		case !xmlChar(r):
+			return true
 		}
 	}
 	return false
+}
+
+// xmlChar reports whether XML 1.0 allows r in a document.
+func xmlChar(r rune) bool {
+	switch {
+	case r == '\t', r == '\n', r == '\r':
+		return true
+	case r < 0x20:
+		return false
+	case r >= 0xD800 && r <= 0xDFFF, r == 0xFFFE, r == 0xFFFF:
+		return false
+	}
+	return r <= 0x10FFFF
 }
 
 // WritePrimary renders the primary.xml document for the given packages.

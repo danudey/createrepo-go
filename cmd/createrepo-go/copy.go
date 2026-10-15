@@ -349,14 +349,19 @@ func verifySourceMetadata(cmd *cobra.Command, src *repo.Repo, srcSig []byte, key
 
 	v, err := sign.NewVerifier(keyrings...)
 	if err != nil {
-		// Package verification needs the rpmkeys tool. Without --verify-sigs
-		// the operator did not ask for it, so its absence must not stop a copy
+		// The keys could not be read. Without --verify-sigs the operator did
+		// not ask for package verification, so that must not stop a copy
 		// that is otherwise fine — the metadata signature above still held.
 		if gf.verifySigs {
 			return nil, noop, err
 		}
 		fmt.Fprintf(errOut, "warning: package signatures cannot be verified here (%v); metadata and checksums are still checked\n", err)
 		return nil, noop, nil
+	}
+	// The copy is served to the target's clients, so judge the packages as
+	// that release's rpm will.
+	if v.Policy, err = targetPolicy(); err != nil {
+		return nil, noop, err
 	}
 	return v, v.Close, nil
 }

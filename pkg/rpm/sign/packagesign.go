@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/danudey/createrepo-go/pkg/gpg"
+	"github.com/danudey/createrepo-go/pkg/rpm/pkgcheck"
 )
 
 // SignatureFormat selects the rpm signature header layout written when signing.
@@ -94,6 +95,18 @@ func (s *PackageSigner) Close() {
 // SignFile copies src to a temporary file, signs the copy with rpmsign, and
 // returns the path of the signed copy plus a cleanup function.
 func (s *PackageSigner) SignFile(src string) (string, func(), error) {
+	// A signature vouches for the package, so a damaged one is never signed:
+	// rpmsign signs the header alone and would happily vouch for a payload
+	// that no longer matches it. A bad existing signature is no obstacle to
+	// replacing it, so only that case looks past signature problems.
+	res, err := pkgcheck.CheckFile(src, pkgcheck.Options{})
+	if err != nil {
+		return "", nil, err
+	}
+	if !res.Intact() || (!s.Replace && !res.OK()) {
+		return "", nil, fmt.Errorf("refusing to sign %s: %w", src, res.Err())
+	}
+
 	tmpDir, err := os.MkdirTemp("", "cr-sign-*")
 	if err != nil {
 		return "", nil, err

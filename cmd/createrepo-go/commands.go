@@ -2,10 +2,8 @@ package main
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/danudey/createrepo-go/internal/cli"
-	"github.com/danudey/createrepo-go/pkg/progress"
 
 	"github.com/spf13/cobra"
 
@@ -109,99 +107,6 @@ func listCmd() *cobra.Command {
 			return nil
 		},
 	}
-}
-
-func verifyCmd() *cobra.Command {
-	var checksums bool
-	var concurrency int
-	cmd := &cobra.Command{
-		Use:   "verify <repo-url>",
-		Short: "Check that the published RPMs match the metadata",
-		Long: `Check that every RPM the metadata references is present with the size and
-checksum the metadata records, and that the repository's intra-repository
-dependencies are satisfied. Nothing is modified.
-
-How far the checksum check goes depends on the backend:
-
-  local disk, SSH/SFTP  the checksum is computed from the stored file (over SSH
-                        with sha256sum, so the RPM never crosses the network),
-                        so contents are always proved.
-  S3, GCS               the object store reports the checksum recorded when the
-                        object was uploaded. That catches metadata and objects
-                        disagreeing, but not an object whose content changed
-                        afterwards.
-  HTTP(S)               no checksum is available without downloading.
-
-Pass --checksums to prove every RPM's checksum from its content regardless,
-downloading each package the backend cannot hash in place. The summary always
-says which of the three applied, so an unproved checksum is never reported as
-though it had been verified.`,
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			opts, err := repoOptions(false)
-			if err != nil {
-				return err
-			}
-			r, err := repo.Open(cli.Ctx(cmd), args[0], opts)
-			if err != nil {
-				return err
-			}
-			defer r.Close()
-
-			out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
-			mode := repo.ChecksumCheap
-			if checksums {
-				mode = repo.ChecksumContent
-				// A full content check can be a large transfer; say so before
-				// starting rather than appearing to hang.
-				if n, size := r.DownloadEstimate(); n > 0 {
-					fmt.Fprintf(out, "hashing %d package(s) from %s: ~%s to download\n", n, r.Backend(), progress.Bytes(size))
-				}
-			}
-
-			res, err := r.Verify(cli.Ctx(cmd), repo.VerifyOptions{Checksums: mode, Concurrency: concurrency})
-			if err != nil {
-				return err
-			}
-			for _, p := range res.Problems {
-				fmt.Fprintln(errOut, "PROBLEM:", p)
-			}
-			if !res.OK() {
-				return fmt.Errorf("%d problem(s) found", len(res.Problems))
-			}
-			fmt.Fprintln(out, verifySummary(res))
-			return nil
-		},
-	}
-	cmd.Flags().BoolVar(&checksums, "checksums", false, "prove every RPM's checksum from its content, downloading each one the backend cannot hash in place")
-	cmd.Flags().IntVar(&concurrency, "concurrency", 6, "number of packages to check in parallel")
-	return cmd
-}
-
-// verifySummary renders a clean verification result, stating exactly how each
-// package's checksum was established so the reader is never left assuming more
-// was proved than actually was.
-func verifySummary(res *repo.VerifyResult) string {
-	var parts []string
-	if res.ChecksumVerified > 0 {
-		parts = append(parts, fmt.Sprintf("%d verified from content", res.ChecksumVerified))
-	}
-	if res.ChecksumRecorded > 0 {
-		parts = append(parts, fmt.Sprintf("%d matched the store's recorded checksum", res.ChecksumRecorded))
-	}
-	if res.ChecksumUnconfirmed > 0 {
-		parts = append(parts, fmt.Sprintf("%d not confirmed", res.ChecksumUnconfirmed))
-	}
-
-	summary := fmt.Sprintf("OK: %d package(s) present with the expected size", res.Packages)
-	if len(parts) > 0 {
-		summary += "; checksums: " + strings.Join(parts, ", ")
-	}
-	summary += "; dependencies satisfied"
-	if res.ChecksumUnconfirmed > 0 {
-		summary += "\nRun with --checksums to download and hash the packages whose checksum this backend cannot confirm."
-	}
-	return summary
 }
 
 // printPlan renders a commit Plan to the command's output.
