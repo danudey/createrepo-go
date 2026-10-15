@@ -241,12 +241,49 @@ func (t *Tracker) Item(name string, size int64) *Item {
 	if !t.begun {
 		return nil
 	}
-	it := &Item{t: t, gen: t.gen, name: name, size: size}
+	return t.startLocked(name, size, false)
+}
+
+// Aside starts a transfer the operation's totals do not count: work the
+// operation did not plan for, such as re-reading a file that was just written.
+// It gets a bar while it runs, but neither its bytes nor its completion move
+// the overall figures, so they keep describing the work Begin announced.
+func (t *Tracker) Aside(name string, size int64) *Item {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.begun {
+		return nil
+	}
+	return t.startLocked(name, size, true)
+}
+
+// startLocked creates and displays an item. Called with t.mu held.
+func (t *Tracker) startLocked(name string, size int64, aside bool) *Item {
+	it := &Item{t: t, gen: t.gen, name: name, size: size, aside: aside}
 	op := t.op
 	it.label.Store(&op)
 	it.bar = t.itemBarLocked(it)
 	t.active = append(t.active, it)
 	return it
+}
+
+// Count credits items that finished without moving any bytes through this
+// process — a server-side relocation, a deletion — so the operation's item
+// count covers all of its work rather than only its transfers.
+func (t *Tracker) Count(items int) {
+	if t == nil || items <= 0 {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.begun {
+		return
+	}
+	t.doneItems += items
+	t.publishLocked()
 }
 
 // Item is one transfer inside an operation.
@@ -256,6 +293,9 @@ type Item struct {
 
 	name string
 	size int64
+	// aside is set for an item started with Aside, whose bytes and completion
+	// the operation's totals ignore.
+	aside bool
 	// label is the phase shown on the item's bar. It is read by the display
 	// without t.mu, so it is atomic.
 	label atomic.Pointer[string]
@@ -282,7 +322,9 @@ func (i *Item) Add(n int64) {
 		return
 	}
 	i.done += n
-	i.t.doneBytes += n
+	if !i.aside {
+		i.t.doneBytes += n
+	}
 	i.setBarLocked()
 }
 
@@ -326,7 +368,9 @@ func (i *Item) rewind() {
 	if i.stale() {
 		return
 	}
-	i.t.doneBytes -= i.done
+	if !i.aside {
+		i.t.doneBytes -= i.done
+	}
 	i.done = 0
 	i.setBarLocked()
 }
@@ -343,7 +387,9 @@ func (i *Item) Done() {
 		return
 	}
 	i.ended = true
-	i.t.doneItems++
+	if !i.aside {
+		i.t.doneItems++
+	}
 	for n, other := range i.t.active {
 		if other == i {
 			i.t.active = append(i.t.active[:n], i.t.active[n+1:]...)
@@ -399,6 +445,26 @@ func (c *countingSeeker) Seek(offset int64, whence int) (int64, error) {
 		c.item.rewind()
 	}
 	return pos, err
+}
+
+// Writer returns w wrapped so every byte written to it counts towards this item
+// and the operation: for a download streamed into a hash or a temporary file.
+func (i *Item) Writer(w io.Writer) io.Writer {
+	if i == nil {
+		return w
+	}
+	return &countingWriter{item: i, w: w}
+}
+
+type countingWriter struct {
+	item *Item
+	w    io.Writer
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.item.Add(int64(n))
+	return n, err
 }
 
 // loop keeps the transfer rate current until the operation it was started for

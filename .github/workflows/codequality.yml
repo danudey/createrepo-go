@@ -56,7 +56,7 @@ env:
   # Bumped by Dependabot? No: this is a tool version, not a dependency. Watch
   # https://github.com/golangci/golangci-lint/releases and raise it
   # deliberately, so new checks land in a commit of their own.
-  GOLANGCI_VERSION: "v2.13.2"
+  GOLANGCI_VERSION: "v2.14.0"
 
 jobs:
   golangci-lint:

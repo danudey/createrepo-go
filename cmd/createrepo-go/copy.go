@@ -5,13 +5,15 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/danudey/createrepo-go/internal/cli"
+
 	"github.com/spf13/cobra"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
-	"github.com/danudey/createrepo-go/pkg/repo"
-	"github.com/danudey/createrepo-go/pkg/repoconfig"
-	"github.com/danudey/createrepo-go/pkg/repodata"
-	"github.com/danudey/createrepo-go/pkg/sign"
+	"github.com/danudey/createrepo-go/pkg/rpm/repo"
+	"github.com/danudey/createrepo-go/pkg/rpm/repoconfig"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
+	"github.com/danudey/createrepo-go/pkg/rpm/sign"
 )
 
 // copyFlags holds the copy-specific options.
@@ -124,23 +126,23 @@ Examples:
 // the destination may look like, then either replicate it byte for byte or
 // rebuild it from the selected packages.
 func runCopy(cmd *cobra.Command, srcLoc, dstLoc string, cf *copyFlags) error {
-	out, errOut := stdout(cmd), stderr(cmd)
+	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 
 	if err := cf.validate(); err != nil {
 		return err
 	}
 
 	// --- source ---------------------------------------------------------
-	srcBE, err := backend.Open(ctx(cmd), srcLoc)
+	srcBE, err := backend.Open(cli.Ctx(cmd), srcLoc)
 	if err != nil {
 		return err
 	}
-	srcCfg, err := repoconfig.Load(ctx(cmd), srcBE)
+	srcCfg, err := repoconfig.Load(cli.Ctx(cmd), srcBE)
 	if err != nil {
 		closeBackend(srcBE)
 		return err
 	}
-	src, err := repo.OpenWith(ctx(cmd), srcBE, repo.Options{})
+	src, err := repo.OpenWith(cli.Ctx(cmd), srcBE, repo.Options{})
 	if err != nil {
 		return fmt.Errorf("source: %w", err)
 	}
@@ -149,7 +151,7 @@ func runCopy(cmd *cobra.Command, srcLoc, dstLoc string, cf *copyFlags) error {
 	keyrings, releaseKeys := verificationKeyrings(cmd, srcCfg, cf.skipVerify)
 	defer releaseKeys()
 
-	srcSig, err := src.MetadataSignature(ctx(cmd))
+	srcSig, err := src.MetadataSignature(cli.Ctx(cmd))
 	if err != nil {
 		return fmt.Errorf("source repomd.xml.asc: %w", err)
 	}
@@ -179,7 +181,7 @@ func runCopy(cmd *cobra.Command, srcLoc, dstLoc string, cf *copyFlags) error {
 	}
 
 	// --- destination state ----------------------------------------------
-	dstBE, err := backend.Open(ctx(cmd), dstLoc)
+	dstBE, err := backend.Open(cli.Ctx(cmd), dstLoc)
 	if err != nil {
 		return err
 	}
@@ -275,7 +277,7 @@ func (cf *copyFlags) filter() (repodata.Filter, error) {
 
 // repoExists reports whether a repository has already been published at be.
 func repoExists(cmd *cobra.Command, be backend.Backend) (bool, error) {
-	_, err := be.Stat(ctx(cmd), "repodata/repomd.xml")
+	_, err := be.Stat(cli.Ctx(cmd), "repodata/repomd.xml")
 	switch {
 	case err == nil:
 		return true, nil
@@ -304,11 +306,11 @@ func verificationKeyrings(cmd *cobra.Command, srcCfg *repoconfig.Config, skip bo
 	}
 	path, cleanup, err := sign.ExportPublicKey(srcCfg.GPGKeyID)
 	if err != nil {
-		fmt.Fprintf(stderr(cmd), "warning: the source repository is signed with %s but that key is not available locally (%v); signatures will not be verified. Pass --keyring to supply it.\n",
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: the source repository is signed with %s but that key is not available locally (%v); signatures will not be verified. Pass --keyring to supply it.\n",
 			srcCfg.GPGKeyID, err)
 		return nil, noop
 	}
-	fmt.Fprintf(stdout(cmd), "verifying against the source's recorded signing key %s\n", srcCfg.GPGKeyID)
+	fmt.Fprintf(cmd.OutOrStdout(), "verifying against the source's recorded signing key %s\n", srcCfg.GPGKeyID)
 	return []string{path}, cleanup
 }
 
@@ -317,7 +319,7 @@ func verificationKeyrings(cmd *cobra.Command, srcCfg *repoconfig.Config, skip bo
 // returns a nil verifier when there is no key to check against.
 func verifySourceMetadata(cmd *cobra.Command, src *repo.Repo, srcSig []byte, keyrings []string, skip bool) (*sign.Verifier, func(), error) {
 	noop := func() {}
-	out, errOut := stdout(cmd), stderr(cmd)
+	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 
 	if skip {
 		if srcSig != nil {
@@ -363,7 +365,7 @@ func verifySourceMetadata(cmd *cobra.Command, src *repo.Repo, srcSig []byte, key
 // source: the destination must record the same origin, or hold nothing the
 // source does not have.
 func checkResumable(cmd *cobra.Command, srcLoc string, dstBE backend.Backend, dstExists bool, src *repo.Repo) error {
-	dstCfg, err := repoconfig.Load(ctx(cmd), dstBE)
+	dstCfg, err := repoconfig.Load(cli.Ctx(cmd), dstBE)
 	if err != nil {
 		return err
 	}
@@ -373,7 +375,7 @@ func checkResumable(cmd *cobra.Command, srcLoc string, dstBE backend.Backend, ds
 	if !dstExists {
 		return nil
 	}
-	dst, err := repo.OpenWith(ctx(cmd), dstBE, repo.Options{})
+	dst, err := repo.OpenWith(cli.Ctx(cmd), dstBE, repo.Options{})
 	if err != nil {
 		return fmt.Errorf("--continue: reading the destination: %w", err)
 	}

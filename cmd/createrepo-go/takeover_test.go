@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danudey/createrepo-go/pkg/repoconfig"
+	"github.com/danudey/createrepo-go/pkg/rpm/repoconfig"
 )
 
 // unmanaged publishes the reference repository without the config file this

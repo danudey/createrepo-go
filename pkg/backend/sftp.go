@@ -130,12 +130,22 @@ func hostKeyCallback() (ssh.HostKeyCallback, error) {
 	}, nil
 }
 
-func (s *sftpBackend) remote(relpath string) string {
-	return path.Join(s.root, strings.TrimLeft(relpath, "/"))
+// remote maps an object path onto the server's filesystem, refusing one that
+// would land outside the root (see ErrUnsafePath).
+func (s *sftpBackend) remote(relpath string) (string, error) {
+	rel, err := remoteRel(relpath)
+	if err != nil {
+		return "", err
+	}
+	return path.Join(s.root, rel), nil
 }
 
 func (s *sftpBackend) Get(_ context.Context, relpath string) (io.ReadCloser, error) {
-	f, err := s.client.Open(s.remote(relpath))
+	p, err := s.remote(relpath)
+	if err != nil {
+		return nil, err
+	}
+	f, err := s.client.Open(p)
 	if os.IsNotExist(err) {
 		return nil, ErrNotExist
 	}
@@ -143,7 +153,11 @@ func (s *sftpBackend) Get(_ context.Context, relpath string) (io.ReadCloser, err
 }
 
 func (s *sftpBackend) Stat(_ context.Context, relpath string) (*FileInfo, error) {
-	fi, err := s.client.Stat(s.remote(relpath))
+	p, err := s.remote(relpath)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := s.client.Stat(p)
 	if os.IsNotExist(err) {
 		return nil, ErrNotExist
 	}
@@ -154,7 +168,10 @@ func (s *sftpBackend) Stat(_ context.Context, relpath string) (*FileInfo, error)
 }
 
 func (s *sftpBackend) Put(_ context.Context, relpath string, r io.Reader, _ int64) error {
-	dst := s.remote(relpath)
+	dst, err := s.remote(relpath)
+	if err != nil {
+		return err
+	}
 	if err := s.client.MkdirAll(path.Dir(dst)); err != nil {
 		return err
 	}
@@ -186,7 +203,11 @@ func (s *sftpBackend) Put(_ context.Context, relpath string, r io.Reader, _ int6
 }
 
 func (s *sftpBackend) Delete(_ context.Context, relpath string) error {
-	err := s.client.Remove(s.remote(relpath))
+	p, err := s.remote(relpath)
+	if err != nil {
+		return err
+	}
+	err = s.client.Remove(p)
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -199,8 +220,14 @@ func (s *sftpBackend) String() string { return s.label }
 // session, so the RPM contents never cross the network (mirroring how Hash
 // uses a remote sha256sum).
 func (s *sftpBackend) Copy(_ context.Context, src, dst string) error {
-	from := s.remote(src)
-	to := s.remote(dst)
+	from, err := s.remote(src)
+	if err != nil {
+		return err
+	}
+	to, err := s.remote(dst)
+	if err != nil {
+		return err
+	}
 	if _, err := s.client.Stat(from); err != nil {
 		if os.IsNotExist(err) {
 			return ErrNotExist
@@ -236,7 +263,10 @@ func (s *sftpBackend) Close() error {
 // each regular file as a repo-relative, forward-slash path with its size. A
 // missing prefix directory yields an empty list.
 func (s *sftpBackend) List(_ context.Context, prefix string) ([]ObjectInfo, error) {
-	root := s.remote(prefix)
+	root, err := s.remote(prefix)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := s.client.Stat(root); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -271,7 +301,11 @@ func (s *sftpBackend) Hash(_ context.Context, relpath, algo string) (string, boo
 		return "", false, nil
 	}
 	// Confirm the file exists first so a missing file is reported precisely.
-	if _, err := s.client.Stat(s.remote(relpath)); err != nil {
+	p, err := s.remote(relpath)
+	if err != nil {
+		return "", false, err
+	}
+	if _, err := s.client.Stat(p); err != nil {
 		if os.IsNotExist(err) {
 			return "", false, ErrNotExist
 		}
@@ -284,7 +318,7 @@ func (s *sftpBackend) Hash(_ context.Context, relpath, algo string) (string, boo
 	defer sess.Close()
 	var out bytes.Buffer
 	sess.Stdout = &out
-	cmd := "sha256sum " + shellQuote(s.remote(relpath))
+	cmd := "sha256sum " + shellQuote(p)
 	if err := sess.Run(cmd); err != nil {
 		// Remote host may lack sha256sum; signal "unknown" rather than fail.
 		return "", false, nil

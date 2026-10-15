@@ -205,23 +205,38 @@ func TestCachedCredsFormat(t *testing.T) {
 }
 
 func TestCredCacheDir(t *testing.T) {
-	t.Setenv(credCacheEnv, "/somewhere/else")
+	t.Setenv(credCacheEnv(), "/somewhere/else")
 	if dir, ok := credCacheDir(); !ok || dir != "/somewhere/else" {
 		t.Errorf("credCacheDir() = %q, %v, want the configured directory", dir, ok)
 	}
 	for _, off := range []string{"off", "OFF", "none", "no", "0", "false"} {
-		t.Setenv(credCacheEnv, off)
+		t.Setenv(credCacheEnv(), off)
 		if dir, ok := credCacheDir(); ok {
-			t.Errorf("credCacheDir() with %s=%q = %q, %v, want caching disabled", credCacheEnv, off, dir, ok)
+			t.Errorf("credCacheDir() with %s=%q = %q, %v, want caching disabled", credCacheEnv(), off, dir, ok)
 		}
 	}
-	t.Setenv(credCacheEnv, "")
+	t.Setenv(credCacheEnv(), "")
 	dir, ok := credCacheDir()
 	if !ok {
 		t.Fatal("credCacheDir() disabled by default, want a default directory")
 	}
 	if filepath.Base(dir) != "aws" || filepath.Base(filepath.Dir(dir)) != "createrepo-go" {
 		t.Errorf("default cache dir = %q, want it under createrepo-go/aws", dir)
+	}
+}
+
+// Each binary keeps the cache location and override variable it has always
+// had, so moving createapt-go into this module does not orphan its cache.
+func TestCredCacheFollowsTheAppName(t *testing.T) {
+	defer SetAppName(appName)
+	SetAppName("createapt-go")
+	if got := credCacheEnv(); got != "CREATEAPT_AWS_CACHE" {
+		t.Errorf("credCacheEnv() = %q, want CREATEAPT_AWS_CACHE", got)
+	}
+	t.Setenv("CREATEAPT_AWS_CACHE", "")
+	dir, ok := credCacheDir()
+	if !ok || filepath.Base(filepath.Dir(dir)) != "createapt-go" {
+		t.Errorf("default cache dir = %q, %v, want it under createapt-go/aws", dir, ok)
 	}
 }
 
@@ -311,7 +326,7 @@ mfa_serial = arn:aws:iam::123456789012:mfa/dan
 `)
 	t.Setenv("AWS_PROFILE", "mfa")
 	dir := t.TempDir()
-	t.Setenv(credCacheEnv, dir)
+	t.Setenv(credCacheEnv(), dir)
 
 	inner := &countingProvider{creds: sessionCreds(time.Now().Add(time.Hour))}
 	cfg := aws.Config{Credentials: inner}

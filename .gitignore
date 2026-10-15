@@ -6,3 +6,9 @@
 
 # createrepo_c temporary working dir
 **/.repodata/
+/createapt-go
+
+# Sample packages built by reference/apt/gen.sh. They are regenerable and the
+# .deb files are binary, so they are not worth versioning.
+/reference/apt/build/
+/reference/apt/packages/

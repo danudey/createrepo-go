@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/danudey/createrepo-go/internal/cli"
+	"github.com/danudey/createrepo-go/pkg/progress"
+
 	"github.com/spf13/cobra"
 
-	"github.com/danudey/createrepo-go/pkg/repo"
-	"github.com/danudey/createrepo-go/pkg/repodata"
+	"github.com/danudey/createrepo-go/pkg/rpm/repo"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
 )
 
 func createCmd() *cobra.Command {
@@ -26,7 +29,7 @@ operations reuse those signing defaults unless overridden.`,
 				return err
 			}
 			defer r.Close()
-			plan, err := r.Commit(ctx(cmd))
+			plan, err := r.Commit(cli.Ctx(cmd))
 			if err != nil {
 				return err
 			}
@@ -61,14 +64,14 @@ longer referenced by the metadata, its RPM file is garbage-collected on publish.
 			for _, n := range names {
 				removed := r.Remove(n, arch, evr)
 				for _, p := range removed {
-					fmt.Fprintf(stdout(cmd), "removed %s\n", p.NEVRA())
+					fmt.Fprintf(cmd.OutOrStdout(), "removed %s\n", p.NEVRA())
 				}
 				total += len(removed)
 			}
 			if total == 0 {
 				return fmt.Errorf("no matching packages found")
 			}
-			plan, err := r.Commit(ctx(cmd))
+			plan, err := r.Commit(cli.Ctx(cmd))
 			if err != nil {
 				return err
 			}
@@ -93,16 +96,16 @@ func listCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			r, err := repo.Open(ctx(cmd), args[0], opts)
+			r, err := repo.Open(cli.Ctx(cmd), args[0], opts)
 			if err != nil {
 				return err
 			}
 			defer r.Close()
 			pkgs := r.Index().Packages()
 			for _, p := range pkgs {
-				fmt.Fprintf(stdout(cmd), "%-40s %12d  %s\n", p.NEVRA(), p.SizePackage, p.Location)
+				fmt.Fprintf(cmd.OutOrStdout(), "%-40s %12d  %s\n", p.NEVRA(), p.SizePackage, p.Location)
 			}
-			fmt.Fprintf(stdout(cmd), "%d package(s)\n", len(pkgs))
+			fmt.Fprintf(cmd.OutOrStdout(), "%d package(s)\n", len(pkgs))
 			return nil
 		},
 	}
@@ -139,24 +142,24 @@ though it had been verified.`,
 			if err != nil {
 				return err
 			}
-			r, err := repo.Open(ctx(cmd), args[0], opts)
+			r, err := repo.Open(cli.Ctx(cmd), args[0], opts)
 			if err != nil {
 				return err
 			}
 			defer r.Close()
 
-			out, errOut := stdout(cmd), stderr(cmd)
+			out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 			mode := repo.ChecksumCheap
 			if checksums {
 				mode = repo.ChecksumContent
 				// A full content check can be a large transfer; say so before
 				// starting rather than appearing to hang.
 				if n, size := r.DownloadEstimate(); n > 0 {
-					fmt.Fprintf(out, "hashing %d package(s) from %s: ~%s to download\n", n, r.Backend(), humanBytes(size))
+					fmt.Fprintf(out, "hashing %d package(s) from %s: ~%s to download\n", n, r.Backend(), progress.Bytes(size))
 				}
 			}
 
-			res, err := r.Verify(ctx(cmd), repo.VerifyOptions{Checksums: mode, Concurrency: concurrency})
+			res, err := r.Verify(cli.Ctx(cmd), repo.VerifyOptions{Checksums: mode, Concurrency: concurrency})
 			if err != nil {
 				return err
 			}
@@ -207,7 +210,7 @@ func verifySummary(res *repo.VerifyResult) string {
 const dryRunPrefix = "[dry-run] "
 
 func printPlan(cmd *cobra.Command, plan *repo.Plan, dryRun bool) {
-	out := stdout(cmd)
+	out := cmd.OutOrStdout()
 	prefix := ""
 	if dryRun {
 		prefix = dryRunPrefix
@@ -258,7 +261,7 @@ func printPlan(cmd *cobra.Command, plan *repo.Plan, dryRun bool) {
 // versions dropped despite a dependent (--prune-break-deps). Warnings go to
 // stderr so they stand out from the normal plan output.
 func printPruneWarnings(cmd *cobra.Command, kept, broken []repodata.Breakage) {
-	errOut := stderr(cmd)
+	errOut := cmd.ErrOrStderr()
 	for _, b := range kept {
 		fmt.Fprintf(errOut, "warning: keeping %s: it is required by %s (%s)\n",
 			b.Provider.NEVRA(), b.Dependent.NEVRA(), b.Requires.Constraint())

@@ -1,17 +1,17 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"os"
-	"strings"
+
+	"github.com/danudey/createrepo-go/internal/cli"
 
 	"github.com/spf13/cobra"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
 	"github.com/danudey/createrepo-go/pkg/progress"
-	"github.com/danudey/createrepo-go/pkg/repo"
-	"github.com/danudey/createrepo-go/pkg/repodata"
+	"github.com/danudey/createrepo-go/pkg/rpm/repo"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
 )
 
 func rebuildCmd() *cobra.Command {
@@ -71,7 +71,7 @@ The cleanup flags require a backend that can list its contents (not plain HTTP).
 			if err != nil {
 				return err
 			}
-			totalBytes, totalFiles, listed, err := r.TotalSize(ctx(cmd))
+			totalBytes, totalFiles, listed, err := r.TotalSize(cli.Ctx(cmd))
 			if err != nil {
 				return err
 			}
@@ -99,7 +99,7 @@ The cleanup flags require a backend that can list its contents (not plain HTTP).
 			}
 
 			// Preview the plan (no side effects), including directory cleanups.
-			preview, err := r.Plan(ctx(cmd))
+			preview, err := r.Plan(cli.Ctx(cmd))
 			if err != nil {
 				return err
 			}
@@ -136,8 +136,8 @@ The cleanup flags require a backend that can list its contents (not plain HTTP).
 			// Destructive from here on (deletes and possibly a large download):
 			// confirm unless the operator opted out.
 			if !assumeYes {
-				if !promptYesNo(cmd, "Proceed with these changes?") {
-					fmt.Fprintln(stdout(cmd), "aborted; no changes made")
+				if !cli.PromptYesNo(cmd, "Proceed with these changes?") {
+					fmt.Fprintln(cmd.OutOrStdout(), "aborted; no changes made")
 					return nil
 				}
 			}
@@ -151,7 +151,7 @@ The cleanup flags require a backend that can list its contents (not plain HTTP).
 				defer cleanup()
 			}
 
-			plan, err := r.Commit(ctx(cmd))
+			plan, err := r.Commit(cli.Ctx(cmd))
 			if err != nil {
 				return err
 			}
@@ -178,7 +178,7 @@ The cleanup flags require a backend that can list its contents (not plain HTTP).
 // plainly that it is publishing the metadata it was given rather than checking
 // it. It returns nil when no refresh was performed.
 func refreshFromPackages(cmd *cobra.Command, r *repo.Repo, requested bool) (*repo.RefreshResult, error) {
-	out, errOut := stdout(cmd), stderr(cmd)
+	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 	local := backend.IsLocal(r.Backend())
 	refresh := local
 	if cmd.Flags().Changed("from-packages") {
@@ -190,16 +190,16 @@ func refreshFromPackages(cmd *cobra.Command, r *repo.Repo, requested bool) (*rep
 			"so anything the metadata gets wrong about a package (checksum, size, dependencies) stays wrong. "+
 			"Pass --from-packages to re-read them")
 		if n, size := r.RefreshEstimate(); n > 0 {
-			fmt.Fprintf(errOut, ", which downloads %d package(s) (~%s)", n, humanBytes(size))
+			fmt.Fprintf(errOut, ", which downloads %d package(s) (~%s)", n, progress.Bytes(size))
 		}
 		fmt.Fprintln(errOut, ".")
 		return nil, nil
 	}
 
 	if n, size := r.RefreshEstimate(); n > 0 {
-		fmt.Fprintf(out, "re-reading %d package(s) from %s: ~%s to download\n", n, r.Backend(), humanBytes(size))
+		fmt.Fprintf(out, "re-reading %d package(s) from %s: ~%s to download\n", n, r.Backend(), progress.Bytes(size))
 	}
-	res, err := r.RefreshFromPackages(ctx(cmd), repo.RefreshOptions{
+	res, err := r.RefreshFromPackages(cli.Ctx(cmd), repo.RefreshOptions{
 		Progress: func(p *repodata.Package, changed bool) {
 			if changed {
 				fmt.Fprintf(out, "refreshed %s from its RPM (the published metadata did not match the file)\n", p.NEVRA())
@@ -242,7 +242,7 @@ func resignPackages(cmd *cobra.Command, r *repo.Repo) (func(), error) {
 			c()
 		}
 	}
-	out := stdout(cmd)
+	out := cmd.OutOrStdout()
 	targets := r.ResignTargets()
 	var toDownload int64
 	for _, p := range targets {
@@ -253,7 +253,7 @@ func resignPackages(cmd *cobra.Command, r *repo.Repo) (func(), error) {
 
 	for _, p := range targets {
 		loc := p.Location
-		tmp, err := r.GetToFile(ctx(cmd), loc)
+		tmp, err := r.GetToFile(cli.Ctx(cmd), loc)
 		if err != nil {
 			cleanupAll()
 			return nil, fmt.Errorf("download %s: %w", loc, err)
@@ -315,25 +315,25 @@ type rebuildReport struct {
 // printRebuildReport renders the before/after summary. Only lines with something
 // to report are shown.
 func printRebuildReport(cmd *cobra.Command, rep rebuildReport) {
-	out := stdout(cmd)
+	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "Rebuild plan for %s\n", rep.location)
 	fmt.Fprintf(out, "  packages:            %d -> %d (%+d)\n",
 		rep.beforeCount, rep.afterCount, rep.afterCount-rep.beforeCount)
 	fmt.Fprintf(out, "  package payload:     %s -> %s\n",
-		humanBytes(rep.beforePkgBytes), humanBytes(rep.afterPkgBytes))
+		progress.Bytes(rep.beforePkgBytes), progress.Bytes(rep.afterPkgBytes))
 	approx := ""
 	if !rep.sizeListed {
 		approx = " (estimated from metadata; backend cannot list)"
 	}
 	fmt.Fprintf(out, "  repository on disk:  %s across %d object(s)%s\n",
-		humanBytes(rep.totalBytes), rep.totalFiles, approx)
+		progress.Bytes(rep.totalBytes), rep.totalFiles, approx)
 	// Show the estimated new total when RPMs are actually being deleted. This
 	// counts the blobs the plan removes, not the drop in package payload: a
 	// duplicate metadata record for a file another record still names shrinks
 	// the payload without freeing a byte.
 	if rep.freedBytes > 0 {
 		fmt.Fprintf(out, "  after rebuild (est.): %s (frees ~%s)\n",
-			humanBytes(rep.totalBytes-rep.freedBytes), humanBytes(rep.freedBytes))
+			progress.Bytes(rep.totalBytes-rep.freedBytes), progress.Bytes(rep.freedBytes))
 	}
 
 	if f := rep.refreshed; f != nil {
@@ -351,11 +351,11 @@ func printRebuildReport(cmd *cobra.Command, rep rebuildReport) {
 	}
 	if rep.resignCount > 0 {
 		fmt.Fprintf(out, "  re-sign:             %d package(s), ~%s to download\n",
-			rep.resignCount, humanBytes(rep.resignBytes))
+			rep.resignCount, progress.Bytes(rep.resignBytes))
 	}
 	if p := rep.plan; p != nil {
 		if len(p.Uploads) > 0 {
-			fmt.Fprintf(out, "  upload:              %d file(s) (%s)\n", len(p.Uploads), humanBytes(p.BytesToUpload))
+			fmt.Fprintf(out, "  upload:              %d file(s) (%s)\n", len(p.Uploads), progress.Bytes(p.BytesToUpload))
 		}
 		if len(p.DeletedRPMs) > 0 {
 			fmt.Fprintf(out, "  gc RPMs:             %d no-longer-referenced file(s)\n", len(p.DeletedRPMs))
@@ -374,25 +374,3 @@ func printRebuildReport(cmd *cobra.Command, rep rebuildReport) {
 		}
 	}
 }
-
-// promptYesNo asks question on stdout and reads a line from the command's input,
-// returning true only for an explicit yes. EOF or a blank line means no.
-func promptYesNo(cmd *cobra.Command, question string) bool {
-	fmt.Fprintf(stdout(cmd), "%s [y/N] ", question)
-	reader := bufio.NewReader(cmd.InOrStdin())
-	line, err := reader.ReadString('\n')
-	if err != nil && line == "" {
-		return false // EOF with no input: treat as "no"
-	}
-	switch strings.ToLower(strings.TrimSpace(line)) {
-	case "y", "yes":
-		return true
-	default:
-		return false
-	}
-}
-
-// humanBytes formats a byte count with a binary (KiB/MiB/...) suffix. It is the
-// same rendering the progress display uses, so a size reported before a
-// transfer and the one reported during it read alike.
-func humanBytes(n int64) string { return progress.Bytes(n) }

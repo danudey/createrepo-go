@@ -1,18 +1,20 @@
 package main
 
 import (
-	"context"
 	"fmt"
-	"io"
 	"os"
 	"strings"
+
+	"github.com/danudey/createrepo-go/internal/cli"
+
+	"github.com/danudey/createrepo-go/pkg/gpg"
 
 	"github.com/spf13/cobra"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
 	"github.com/danudey/createrepo-go/pkg/progress"
-	"github.com/danudey/createrepo-go/pkg/repo"
-	"github.com/danudey/createrepo-go/pkg/sign"
+	"github.com/danudey/createrepo-go/pkg/rpm/repo"
+	"github.com/danudey/createrepo-go/pkg/rpm/sign"
 )
 
 // version is overridable at build time with -ldflags.
@@ -58,6 +60,13 @@ type globalFlags struct {
 	gpgKeyID        string
 	gpgPass         string
 	keyrings        []string
+
+	// gpgNoPrompt forbids every interactive passphrase prompt gpg could raise
+	// while signing metadata or looking up keys. It is what an unattended run
+	// wants: a CI runner that allocates a TTY looks interactive to gpg-agent,
+	// so without this a missing passphrase hangs the job on a prompt instead
+	// of failing it.
+	gpgNoPrompt bool
 }
 
 // compatProfile is the set of defaults a --target selects.
@@ -96,13 +105,6 @@ var gf globalFlags
 // tracker is inert, so it is passed around without being checked for.
 var prog *progress.Tracker
 
-// stdout and stderr return a command's output writers routed through the
-// progress display, so that a line printed while the bars are up erases them
-// first rather than landing on top of them. Without a display they are the
-// command's own writers, unchanged.
-func stdout(cmd *cobra.Command) io.Writer { return prog.Wrap(cmd.OutOrStdout()) }
-func stderr(cmd *cobra.Command) io.Writer { return prog.Wrap(cmd.ErrOrStderr()) }
-
 func rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "createrepo-go",
@@ -140,6 +142,7 @@ never downloaded.`,
 	pf.StringVar(&gf.gpgKey, "gpg-key", "", "path to a GPG private key file (for signing)")
 	pf.StringVar(&gf.gpgKeyID, "gpg-key-id", "", "GPG key id/uid from the local keyring (for signing)")
 	pf.StringVar(&gf.gpgPass, "gpg-passphrase", os.Getenv("CREATEREPO_GPG_PASSPHRASE"), "passphrase for the signing key (or set CREATEREPO_GPG_PASSPHRASE)")
+	pf.BoolVar(&gf.gpgNoPrompt, "gpg-no-prompt", cli.EnvBool("CREATEREPO_GPG_NO_PROMPT"), "never let gpg ask for a key passphrase while signing metadata; fail instead of prompting (or set CREATEREPO_GPG_NO_PROMPT=1). Use this in CI, where a prompt hangs the job")
 	pf.StringArrayVar(&gf.keyrings, "keyring", nil, "public keyring file for --verify-sigs (repeatable)")
 
 	root.AddCommand(addCmd(), removeCmd(), rebuildCmd(), copyCmd(), createCmd(), takeoverCmd(), listCmd(), verifyCmd(), checkCmd())
@@ -154,9 +157,10 @@ func preRunE(cmd *cobra.Command, args []string) error {
 	}
 	// The display goes to stderr: it is not part of a command's output, and a
 	// caller piping that output somewhere should not be sent bars along with it.
-	prog = progress.New(cmd.ErrOrStderr(), gf.progress)
-	applyAWSEnv()
+	prog = cli.SetupProgress(cmd, gf.progress)
+	cli.ApplyAWSEnv(gf.awsProfile, gf.awsRegion)
 	backend.InsecureIgnoreHostKey = gf.insecureIgnoreHostKey
+	gpg.NoPassphrasePrompt = gf.gpgNoPrompt
 	// rebuild --resign-packages is an explicit instruction to sign the packages,
 	// so it satisfies "what to sign" for a supplied key. It is deliberately not
 	// derived from the recorded config (which would silently re-sign the whole
@@ -165,21 +169,6 @@ func preRunE(cmd *cobra.Command, args []string) error {
 		gf.signPackages = true
 	}
 	return validateSigningFlags()
-}
-
-// applyAWSEnv translates --profile/--region into the AWS_PROFILE/AWS_REGION
-// environment variables consulted by the AWS SDK's default config loader. Only
-// flags the user actually set are applied, so an existing environment (or the
-// default profile) is left untouched otherwise.
-//
-// os.Setenv only fails on a malformed name, and both names here are constants.
-func applyAWSEnv() {
-	if gf.awsProfile != "" {
-		_ = os.Setenv("AWS_PROFILE", gf.awsProfile)
-	}
-	if gf.awsRegion != "" {
-		_ = os.Setenv("AWS_REGION", gf.awsRegion)
-	}
 }
 
 // validateSigningFlags rejects ambiguous signing intent. In particular, a
@@ -274,16 +263,8 @@ func metadataSigner() (repo.Signer, error) {
 	case gf.gpgKey != "":
 		return sign.NewKeyFileSigner(gf.gpgKey, gf.gpgPass)
 	case gf.gpgKeyID != "":
-		return sign.NewKeyIDSigner(gf.gpgKeyID), nil
+		return sign.NewKeyIDSigner(gf.gpgKeyID, gf.gpgPass), nil
 	default:
 		return nil, fmt.Errorf("--sign-metadata requires --gpg-key or --gpg-key-id")
 	}
-}
-
-// ctx returns a context tied to the command.
-func ctx(cmd *cobra.Command) context.Context {
-	if c := cmd.Context(); c != nil {
-		return c
-	}
-	return context.Background()
 }

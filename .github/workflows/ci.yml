@@ -111,6 +111,13 @@ jobs:
       - name: Build
         run: go build -v ${{ env.PACKAGES }}
 
+      # createapt-go's sample packages are built rather than committed (the
+      # .deb files are binary and regenerable). dpkg-deb only exists on the
+      # Linux runners; elsewhere the tests that need them skip themselves.
+      - name: Build the apt fixtures
+        if: runner.os == 'Linux'
+        run: ./reference/apt/gen.sh
+
       # The race detector needs cgo, so it does not work on every platform,
       # but it does on all four of the runners above. It roughly doubles the
       # test wall time and is worth it: a data race that only shows up under
@@ -146,8 +153,16 @@ jobs:
       matrix:
         include:
           - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: linux, goarch: arm, goarm: "7" }
+          - { goos: linux, goarch: riscv64 }
+          - { goos: linux, goarch: ppc64le }
+          - { goos: linux, goarch: s390x }
           - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
           - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
+          - { goos: freebsd, goarch: amd64 }
           # Uncomment to prove the code is portable beyond the mainstream:
           # - { goos: netbsd, goarch: amd64 }
           # - { goos: openbsd, goarch: arm64 }
@@ -170,5 +185,6 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
           CGO_ENABLED: "0"
         run: go build -v ${{ env.PACKAGES }}

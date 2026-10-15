@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -84,4 +85,59 @@ func paths(objs []ObjectInfo) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// An object path comes from a repository's metadata, so a hostile one can name
+// anything. None of them may reach a file outside the root.
+func TestLocalRefusesPathsOutsideTheRoot(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "repo")
+	be, err := newLocal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, rel := range []string{"../escaped", "pool/../../escaped", "/../escaped", "..", `..\escaped`} {
+		if filepath.Separator != '\\' && strings.Contains(rel, `\`) {
+			continue // a backslash is an ordinary filename character here
+		}
+		if err := be.Put(ctx, rel, strings.NewReader("x"), 1); !errors.Is(err, ErrUnsafePath) {
+			t.Errorf("Put(%q) = %v, want ErrUnsafePath", rel, err)
+		}
+		if _, err := be.Get(ctx, rel); !errors.Is(err, ErrUnsafePath) {
+			t.Errorf("Get(%q) = %v, want ErrUnsafePath", rel, err)
+		}
+		if err := be.Delete(ctx, rel); !errors.Is(err, ErrUnsafePath) {
+			t.Errorf("Delete(%q) = %v, want ErrUnsafePath", rel, err)
+		}
+		if err := be.Copy(ctx, "a", rel); !errors.Is(err, ErrUnsafePath) && !errors.Is(err, ErrNotExist) {
+			t.Errorf("Copy(a, %q) = %v, want an error", rel, err)
+		}
+		if p, ok := LocalPath(be, rel); ok {
+			t.Errorf("LocalPath(%q) = %q, want none", rel, p)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(parent, "escaped")); !os.IsNotExist(err) {
+		t.Errorf("a file was written outside the root: %v", err)
+	}
+
+	// Paths that only look odd still resolve inside the root.
+	for _, rel := range []string{"/pool/a.deb", "pool/../dists/Release", "./x"} {
+		if err := be.Put(ctx, rel, strings.NewReader("x"), 1); err != nil {
+			t.Errorf("Put(%q) = %v, want success", rel, err)
+		}
+	}
+}
+
+func TestRemoteRel(t *testing.T) {
+	for _, rel := range []string{"..", "../x", "a/../../x", "/../x", "//../x"} {
+		if _, err := remoteRel(rel); !errors.Is(err, ErrUnsafePath) {
+			t.Errorf("remoteRel(%q) = %v, want ErrUnsafePath", rel, err)
+		}
+	}
+	for rel, want := range map[string]string{"": "", "/a/b": "a/b", "a/../b": "a/../b", "..a/b": "..a/b"} {
+		if got, err := remoteRel(rel); err != nil || got != want {
+			t.Errorf("remoteRel(%q) = %q, %v, want %q", rel, got, err, want)
+		}
+	}
 }

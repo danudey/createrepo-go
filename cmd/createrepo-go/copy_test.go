@@ -7,12 +7,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danudey/createrepo-go/pkg/repo"
+	"github.com/danudey/createrepo-go/pkg/rpm/repo"
 )
 
 const (
-	helloRPM  = "../../reference/rpmbuild/RPMS/noarch/hello-2.10-3.noarch.rpm"
-	libfooRPM = "../../reference/rpmbuild/RPMS/x86_64/libfoo-1.3.0-1.x86_64.rpm"
+	helloRPM  = "../../reference/rpm/rpmbuild/RPMS/noarch/hello-2.10-3.noarch.rpm"
+	libfooRPM = "../../reference/rpm/rpmbuild/RPMS/x86_64/libfoo-1.3.0-1.x86_64.rpm"
 )
 
 // runCLI executes the root command with a fresh flag set, so the global flag

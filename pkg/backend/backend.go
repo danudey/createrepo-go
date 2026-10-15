@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"path"
 	"strings"
 )
 
@@ -116,7 +117,7 @@ type Copier interface {
 // one where reading them means a download.
 type FileStore interface {
 	// LocalPath returns the filesystem path of the named object. The object
-	// need not exist.
+	// need not exist. It returns "" for a path that would escape the root.
 	LocalPath(relpath string) string
 }
 
@@ -127,7 +128,26 @@ func LocalPath(be Backend, relpath string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	return fs.LocalPath(relpath), true
+	p := fs.LocalPath(relpath)
+	return p, p != ""
+}
+
+// ErrUnsafePath is returned for an object path that would resolve outside the
+// repository root, such as "../../etc/passwd". Object paths often come from a
+// repository's own metadata (an rpm location href, an apt Filename field), so
+// a hostile or corrupt repository can name anything; a copy from one must not
+// be able to write beside the destination rather than into it.
+var ErrUnsafePath = errors.New("backend: path escapes the repository root")
+
+// remoteRel validates a slash-separated object path for a backend that joins
+// it onto a POSIX root directory, returning it without leading slashes. A
+// leading slash means the repository root, as it always has.
+func remoteRel(relpath string) (string, error) {
+	rel := strings.TrimLeft(relpath, "/")
+	if c := path.Clean(rel); c == ".." || strings.HasPrefix(c, "../") {
+		return "", fmt.Errorf("%w: %q", ErrUnsafePath, relpath)
+	}
+	return rel, nil
 }
 
 // IsLocal reports whether a backend's objects are local files.
@@ -153,6 +173,29 @@ func IsReadOnly(be Backend) bool {
 // Closer is implemented by backends holding connections that should be closed.
 type Closer interface {
 	Close() error
+}
+
+// Close closes be if it holds resources (a Closer), and is a no-op for one
+// that does not.
+func Close(be Backend) error {
+	if c, ok := be.(Closer); ok {
+		return c.Close()
+	}
+	return nil
+}
+
+// CheckPath reports an object path that cannot be safely used as a
+// destination: one that would resolve outside the repository root on any
+// backend, or that holds a backslash, which Windows treats as a separator. A
+// leading slash means the root. Paths read from a source repository's metadata
+// are checked with it before anything is transferred, so a hostile repository
+// is refused up front rather than part-way through a copy.
+func CheckPath(relpath string) error {
+	if strings.Contains(relpath, `\`) {
+		return fmt.Errorf("%w: %q contains a backslash", ErrUnsafePath, relpath)
+	}
+	_, err := remoteRel(relpath)
+	return err
 }
 
 // Open creates a backend for the given repository location. Supported schemes:

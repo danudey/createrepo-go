@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // local is a Backend backed by a directory on the local filesystem.
@@ -23,16 +24,32 @@ func newLocal(root string) (*local, error) {
 	return &local{root: abs}, nil
 }
 
-func (l *local) path(relpath string) string {
-	return filepath.Join(l.root, filepath.FromSlash(relpath))
+// path maps an object path onto the filesystem, refusing one that would land
+// outside the root (see ErrUnsafePath). A leading slash means the root.
+func (l *local) path(relpath string) (string, error) {
+	rel := filepath.FromSlash(strings.TrimLeft(relpath, "/"))
+	if rel != "" && !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("%w: %q", ErrUnsafePath, relpath)
+	}
+	return filepath.Join(l.root, rel), nil
 }
 
 // LocalPath implements FileStore: this backend's objects are plain files, so a
 // caller can open one directly rather than transferring a copy.
-func (l *local) LocalPath(relpath string) string { return l.path(relpath) }
+func (l *local) LocalPath(relpath string) string {
+	p, err := l.path(relpath)
+	if err != nil {
+		return ""
+	}
+	return p
+}
 
 func (l *local) Get(_ context.Context, relpath string) (io.ReadCloser, error) {
-	f, err := os.Open(l.path(relpath))
+	p, err := l.path(relpath)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.Open(p)
 	if os.IsNotExist(err) {
 		return nil, ErrNotExist
 	}
@@ -40,7 +57,11 @@ func (l *local) Get(_ context.Context, relpath string) (io.ReadCloser, error) {
 }
 
 func (l *local) Stat(_ context.Context, relpath string) (*FileInfo, error) {
-	fi, err := os.Stat(l.path(relpath))
+	p, err := l.path(relpath)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := os.Stat(p)
 	if os.IsNotExist(err) {
 		return nil, ErrNotExist
 	}
@@ -51,7 +72,10 @@ func (l *local) Stat(_ context.Context, relpath string) (*FileInfo, error) {
 }
 
 func (l *local) Put(_ context.Context, relpath string, r io.Reader, _ int64) error {
-	dst := l.path(relpath)
+	dst, err := l.path(relpath)
+	if err != nil {
+		return err
+	}
 	// #nosec G301 -- repository directories are served to clients over HTTP
 	// and must stay world-readable; 0750 would break the published repo.
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
@@ -75,7 +99,11 @@ func (l *local) Put(_ context.Context, relpath string, r io.Reader, _ int64) err
 }
 
 func (l *local) Delete(_ context.Context, relpath string) error {
-	err := os.Remove(l.path(relpath))
+	p, err := l.path(relpath)
+	if err != nil {
+		return err
+	}
+	err = os.Remove(p)
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -87,7 +115,11 @@ func (l *local) String() string { return l.root }
 // Copy duplicates src to dst on the local filesystem, reusing Put's atomic
 // temp-file-and-rename so a reader never observes a partial destination.
 func (l *local) Copy(ctx context.Context, src, dst string) error {
-	in, err := os.Open(l.path(src))
+	p, err := l.path(src)
+	if err != nil {
+		return err
+	}
+	in, err := os.Open(p)
 	if os.IsNotExist(err) {
 		return ErrNotExist
 	}
@@ -102,9 +134,12 @@ func (l *local) Copy(ctx context.Context, src, dst string) error {
 // returning each regular file as a repo-relative, forward-slash path. A missing
 // prefix directory yields an empty list (an empty repository is not an error).
 func (l *local) List(_ context.Context, prefix string) ([]ObjectInfo, error) {
-	root := l.path(prefix)
+	root, err := l.path(prefix)
+	if err != nil {
+		return nil, err
+	}
 	var out []ObjectInfo
-	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			if os.IsNotExist(err) && p == root {
 				return nil // nothing under this prefix yet
@@ -139,7 +174,11 @@ func (l *local) Hash(_ context.Context, relpath, algo string) (string, bool, err
 	if algo != AlgoSHA256 {
 		return "", false, fmt.Errorf("local: unsupported hash %q", algo)
 	}
-	f, err := os.Open(l.path(relpath))
+	p, err := l.path(relpath)
+	if err != nil {
+		return "", false, err
+	}
+	f, err := os.Open(p)
 	if os.IsNotExist(err) {
 		return "", false, ErrNotExist
 	}

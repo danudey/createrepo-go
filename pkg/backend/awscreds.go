@@ -24,10 +24,24 @@ import (
 // file and reuses them until they expire, so only the first command of a
 // session prompts.
 
-// credCacheEnv overrides where session credentials are cached. Set it to a
-// directory, or to "off" to disable caching (see credCacheDir).
-// #nosec G101 -- the name of an environment variable, not a credential.
-const credCacheEnv = "CREATEREPO_AWS_CACHE"
+// appName names the program for the credential cache: it is the cache's
+// directory under the user cache directory, and the stem of the environment
+// variable that overrides it. Each binary built from this module sets its own
+// with SetAppName, so createrepo-go and createapt-go keep the cache locations
+// and variable names they have always had.
+var appName = "createrepo-go"
+
+// SetAppName sets the program name the credential cache is filed under. Call
+// it once from main, before opening a backend.
+func SetAppName(name string) { appName = name }
+
+// credCacheEnv names the variable that overrides where session credentials are
+// cached: CREATEREPO_AWS_CACHE for createrepo-go, CREATEAPT_AWS_CACHE for
+// createapt-go. Set it to a directory, or to "off" to disable caching (see
+// credCacheDir).
+func credCacheEnv() string {
+	return strings.ToUpper(strings.TrimSuffix(appName, "-go")) + "_AWS_CACHE"
+}
 
 // credExpiryWindow is how long before their stated expiry cached credentials
 // are treated as spent, so a long operation is not signed with credentials
@@ -124,7 +138,7 @@ func (p *cachingProvider) read() (aws.Credentials, bool) {
 		SecretAccessKey: c.SecretAccessKey,
 		SessionToken:    c.SessionToken,
 		AccountID:       c.AccountID,
-		Source:          "createrepo-go credential cache",
+		Source:          appName + " credential cache",
 		CanExpire:       true,
 		Expires:         c.Expiration,
 	}, true
@@ -171,9 +185,9 @@ func (p *cachingProvider) write(creds aws.Credentials) error {
 
 // credCacheDir reports the directory holding cached credentials, and whether
 // caching is on at all. It defaults to the user cache directory and can be
-// pointed elsewhere, or turned off, with CREATEREPO_AWS_CACHE.
+// pointed elsewhere, or turned off, with the variable credCacheEnv names.
 func credCacheDir() (string, bool) {
-	if v := os.Getenv(credCacheEnv); v != "" {
+	if v := os.Getenv(credCacheEnv()); v != "" {
 		switch strings.ToLower(v) {
 		case "off", "no", "none", "0", "false":
 			return "", false
@@ -184,7 +198,7 @@ func credCacheDir() (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	return filepath.Join(base, "createrepo-go", "aws"), true
+	return filepath.Join(base, appName, "aws"), true
 }
 
 // credCacheKey names the cache file for the credentials the active profile
