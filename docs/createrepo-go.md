@@ -141,9 +141,8 @@ keep working.)
 --gpg-key-id ID           key id/uid from the local keyring (signing)
 --gpg-passphrase / $CREATEREPO_GPG_PASSPHRASE
 --gpg-no-prompt / $CREATEREPO_GPG_NO_PROMPT
-                          never let gpg prompt for a passphrase while signing
-                          metadata; fail instead (for CI). rpmsign's own
-                          prompting is not covered: give --gpg-passphrase
+                          never let gpg prompt for a passphrase, for metadata
+                          or package signing; fail instead (for CI)
 ```
 
 ## Examples

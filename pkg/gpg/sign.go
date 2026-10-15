@@ -190,10 +190,18 @@ func Command(args ...string) *exec.Cmd {
 	}
 	cmd := exec.Command(Binary(), append(prefix, args...)...)
 	if NoPassphrasePrompt {
-		cmd.Env = envWithout("GPG_TTY", "DISPLAY", "WAYLAND_DISPLAY")
+		cmd.Env = envWithout(promptVars...)
 	}
 	return cmd
 }
+
+// PromptlessEnv returns the current environment without the variables
+// pinentry uses to reach a human: a terminal and a display. It is for a gpg run
+// by another program (rpmsign) when NoPassphrasePrompt is set.
+func PromptlessEnv() []string { return envWithout(promptVars...) }
+
+// promptVars are what pinentry looks for to put a prompt in front of someone.
+var promptVars = []string{"GPG_TTY", "DISPLAY", "WAYLAND_DISPLAY"}
 
 // envWithout returns the current environment with the named variables dropped.
 func envWithout(names ...string) []string {

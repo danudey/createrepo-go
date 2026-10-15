@@ -61,8 +61,8 @@ type globalFlags struct {
 	gpgPass         string
 	keyrings        []string
 
-	// gpgNoPrompt forbids every interactive passphrase prompt gpg could raise
-	// while signing metadata or looking up keys. It is what an unattended run
+	// gpgNoPrompt forbids every interactive passphrase prompt gpg could raise,
+	// whether it runs directly or under rpmsign. It is what an unattended run
 	// wants: a CI runner that allocates a TTY looks interactive to gpg-agent,
 	// so without this a missing passphrase hangs the job on a prompt instead
 	// of failing it.
@@ -142,7 +142,7 @@ never downloaded.`,
 	pf.StringVar(&gf.gpgKey, "gpg-key", "", "path to a GPG private key file (for signing)")
 	pf.StringVar(&gf.gpgKeyID, "gpg-key-id", "", "GPG key id/uid from the local keyring (for signing)")
 	pf.StringVar(&gf.gpgPass, "gpg-passphrase", os.Getenv("CREATEREPO_GPG_PASSPHRASE"), "passphrase for the signing key (or set CREATEREPO_GPG_PASSPHRASE)")
-	pf.BoolVar(&gf.gpgNoPrompt, "gpg-no-prompt", cli.EnvBool("CREATEREPO_GPG_NO_PROMPT"), "never let gpg ask for a key passphrase while signing metadata; fail instead of prompting (or set CREATEREPO_GPG_NO_PROMPT=1). Use this in CI, where a prompt hangs the job")
+	pf.BoolVar(&gf.gpgNoPrompt, "gpg-no-prompt", cli.EnvBool("CREATEREPO_GPG_NO_PROMPT"), "never let gpg ask for a key passphrase while signing; fail instead of prompting (or set CREATEREPO_GPG_NO_PROMPT=1). Use this in CI, where a prompt hangs the job")
 	pf.StringArrayVar(&gf.keyrings, "keyring", nil, "public keyring file for --verify-sigs (repeatable)")
 
 	root.AddCommand(addCmd(), removeCmd(), rebuildCmd(), copyCmd(), createCmd(), takeoverCmd(), listCmd(), verifyCmd(), checkCmd())
