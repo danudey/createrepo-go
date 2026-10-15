@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -158,6 +159,11 @@ func TestLoadKeyringRejectsNonKeys(t *testing.T) {
 // non-interactive hardening can be asserted without a real gpg or a real key.
 func fakeGPG(t *testing.T) (record func() (args string, env string)) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		// The stand-in is a shell script, which Windows cannot execute. The
+		// hardening it checks is the same argv and environment on every OS.
+		t.Skip("the fake gpg is a shell script")
+	}
 	dir := t.TempDir()
 	argsFile := filepath.Join(dir, "args")
 	envFile := filepath.Join(dir, "env")
