@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -70,6 +71,11 @@ func TestPackageSignWithAPassphrase(t *testing.T) {
 // The passphrase must never appear on a command line, where any local user can
 // read it with ps, and the file that carries it must not outlive the signing.
 func TestPackageSignKeepsThePassphraseOffTheCommandLine(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// The stand-in rpmsign is a shell script, which Windows cannot run
+		// (and rpm itself does not exist there).
+		t.Skip("the fake rpmsign is a shell script")
+	}
 	bin := t.TempDir()
 	log := filepath.Join(bin, "args")
 	script := `#!/bin/sh
