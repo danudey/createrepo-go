@@ -132,24 +132,78 @@ func (s *PackageSigner) SignFile(src string) (string, func(), error) {
 	if s.gpgHome != "" {
 		args = append(args, "--define", "_gpg_path "+s.gpgHome)
 	}
-	if s.passphrase != "" {
-		// Use a loopback pinentry so gpg reads the passphrase non-interactively.
-		signCmd := fmt.Sprintf(
-			"%%{__gpg} gpg --batch --no-verbose --no-armor --pinentry-mode loopback --passphrase %s -u \"%%{_gpg_name}\" -sbo %%{__signature_filename} --digest-algo sha256 %%{__plaintext_filename}",
-			s.passphrase)
-		args = append(args, "--define", "__gpg_sign_cmd "+signCmd)
+	// rpm adds _gpg_sign_cmd_extra_args to its own gpg command line (rpm 4.13
+	// and later, rpm 6 included), so the passphrase settings ride along without
+	// replacing that command, whose form differs between rpm versions.
+	env := os.Environ()
+	switch {
+	case s.passphrase != "":
+		// The passphrase goes to gpg in a private file, never on a command
+		// line: an argument is visible to every local user through ps, and in
+		// a macro definition rpm would expand it, running anything written as
+		// %(...).
+		passFile, remove, err := writePassphraseFile(s.passphrase)
+		if err != nil {
+			cleanup()
+			return "", nil, err
+		}
+		defer remove()
+		args = append(args, "--define",
+			"_gpg_sign_cmd_extra_args --pinentry-mode loopback --passphrase-file "+macroQuote(passFile))
+	case gpg.NoPassphrasePrompt:
+		// No passphrase to hand over and none may be asked for: make
+		// gpg-agent fail rather than launch pinentry, and deny pinentry a
+		// terminal or display to find.
+		args = append(args, "--define", "_gpg_sign_cmd_extra_args --pinentry-mode error")
+		env = gpg.PromptlessEnv()
 	}
 	args = append(args, dst)
 
 	cmd := exec.Command("rpmsign", args...)
+	cmd.Env = env
 	if s.gpgHome != "" {
-		cmd.Env = append(os.Environ(), "GNUPGHOME="+s.gpgHome)
+		cmd.Env = append(cmd.Env, "GNUPGHOME="+s.gpgHome)
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		cleanup()
 		return "", nil, fmt.Errorf("rpmsign %s: %w: %s", src, err, out)
 	}
 	return dst, cleanup, nil
+}
+
+// writePassphraseFile stores passphrase in a new file only this user can read,
+// inside a directory only this user can enter, returning its path and a
+// function that removes both.
+func writePassphraseFile(passphrase string) (string, func(), error) {
+	dir, err := os.MkdirTemp("", "cr-pass-*")
+	if err != nil {
+		return "", nil, err
+	}
+	remove := func() { os.RemoveAll(dir) }
+	// #nosec G302 -- 0700 on a directory, where the execute bit is required
+	// to traverse it.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		remove()
+		return "", nil, err
+	}
+	p := filepath.Join(dir, "passphrase")
+	if strings.Contains(p, "'") {
+		remove()
+		return "", nil, fmt.Errorf("the temporary directory %s contains a single quote, so the passphrase file cannot be named to rpmsign safely; set TMPDIR elsewhere", dir)
+	}
+	if err := os.WriteFile(p, []byte(passphrase), 0o600); err != nil {
+		remove()
+		return "", nil, err
+	}
+	return p, remove, nil
+}
+
+// macroQuote makes a path safe to place in an rpm macro that becomes part of a
+// command line: single-quoted for the argument splitter, with %% so rpm does
+// not expand a percent sign. The path must not hold a single quote
+// (writePassphraseFile refuses one).
+func macroQuote(p string) string {
+	return "'" + strings.ReplaceAll(p, "%", "%%") + "'"
 }
 
 // rpmsignSupportsRPMV4 reports whether the local rpmsign understands the
