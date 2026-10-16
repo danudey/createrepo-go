@@ -2,6 +2,7 @@ package takeover
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
 	"fmt"
@@ -111,7 +112,7 @@ func (f foreign) build(t *testing.T) string {
 // dataEntry builds the repomd record for an uncompressed document. The
 // checksums are the real ones, so the repository is internally consistent.
 func dataEntry(typ, href string, body []byte) repodata.DataEntry {
-	sum := sha512.Sum512_256(body) // any real digest will do for the fixture
+	sum := sha256.Sum256(body)
 	hexSum := hex.EncodeToString(sum[:])
 	return repodata.DataEntry{
 		Type: typ, ChecksumType: "sha256", Checksum: hexSum, OpenChecksum: hexSum,
