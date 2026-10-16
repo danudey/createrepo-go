@@ -63,17 +63,21 @@ func TestLongKeyID(t *testing.T) {
 // "--" was passed, gpg read "--output=<path>" as an option and wrote the
 // exported keyring over that path.
 func TestKeyIDIsNeverAnOption(t *testing.T) {
-	if _, err := exec.LookPath("gpg"); err != nil {
-		t.Skip("gpg not available")
+	if _, err := exec.LookPath(Binary()); err != nil {
+		t.Skip("gpg is not installed")
 	}
 	home := t.TempDir()
 	t.Setenv("GNUPGHOME", home)
+	if err := os.Chmod(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	// gpg writes nothing for an empty keyring, so there must be a key for the
-	// injected --output to have something to write.
-	gen := exec.Command("gpg", "--batch", "--passphrase", "", "--quick-generate-key",
+	// injected --output to have something to write. Some runners cannot make
+	// one (no agent on macOS, a non-native path on Windows), so skip there.
+	gen := exec.Command(Binary(), "--batch", "--passphrase", "", "--quick-generate-key",
 		"CR Test <cr-test@example.com>", "ed25519", "sign", "never")
 	if out, err := gen.CombinedOutput(); err != nil {
-		t.Fatalf("generate key: %v: %s", err, out)
+		t.Skipf("could not generate a test key with gpg: %v: %s", err, out)
 	}
 	target := filepath.Join(t.TempDir(), "pwned")
 	keyID := "--output=" + target
