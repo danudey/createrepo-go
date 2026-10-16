@@ -132,7 +132,12 @@ func (s *PackageSigner) SignFile(src string) (string, func(), error) {
 		}
 	}
 
-	args := []string{"--addsign", "--define", "_gpg_name " + s.keyID}
+	keyID, err := s.macroKeyID()
+	if err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	args := []string{"--addsign", "--define", "_gpg_name " + keyID}
 	// For the v4 (legacy) format, ensure the RSAHEADER signature that RHEL 8/9
 	// read is present. rpm 6 writes only the new OPENPGP tag by default, so we
 	// request --rpmv4 to additionally emit the legacy signature; the flag does
@@ -182,6 +187,25 @@ func (s *PackageSigner) SignFile(src string) (string, func(), error) {
 		return "", nil, fmt.Errorf("rpmsign %s: %w: %s", src, err, out)
 	}
 	return dst, cleanup, nil
+}
+
+// macroKeyID returns the signing key in a form that is safe inside an rpm
+// macro definition. rpm expands macros in a --define, so a %(...) in the key
+// id would run as a shell command; only a hexadecimal key id or fingerprint
+// (with gpg's optional trailing "!") goes in as given. Anything else, such as
+// a uid typed on the command line, is first resolved to its fingerprint.
+func (s *PackageSigner) macroKeyID() (string, error) {
+	if gpg.CheckKeyID(s.keyID) == nil {
+		return s.keyID, nil
+	}
+	fpr, err := gpg.Fingerprint("", s.keyID)
+	if err != nil {
+		return "", fmt.Errorf("resolve signing key %q: %w", s.keyID, err)
+	}
+	if err := gpg.CheckKeyID(fpr); err != nil {
+		return "", fmt.Errorf("resolve signing key %q: %w", s.keyID, err)
+	}
+	return fpr, nil
 }
 
 // writePassphraseFile stores passphrase in a new file only this user can read,

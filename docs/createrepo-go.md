@@ -575,6 +575,11 @@ the signing choices in effect:
 - `gpg_key_id` is always stored as the key's **fingerprint**, resolved from
   whichever of `--gpg-key`/`--gpg-key-id` was supplied, so it is portable across
   machines.
+- A hand-edited `gpg_key_id` must still be a hexadecimal key id or fingerprint
+  (optionally `0x`-prefixed). A trailing `!` is allowed and tells gpg to use
+  exactly that key rather than one of its subkeys. Anything else, such as a
+  uid, is refused when the file is read, because the file may come from a
+  repository you do not control.
 - The recorded settings act as **defaults**: a later `add`/`remove` that omits
   the relevant flags re-uses them (e.g. re-signs `repomd.xml` with the same key,
   keeps the same target profile). Pass the flags explicitly to override — an
