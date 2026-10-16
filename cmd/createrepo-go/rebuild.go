@@ -258,7 +258,7 @@ func resignPackages(cmd *cobra.Command, r *repo.Repo) (func(), error) {
 			cleanupAll()
 			return nil, fmt.Errorf("download %s: %w", loc, err)
 		}
-		signed, cleanup, err := signer.SignFile(tmp)
+		signed, cleanup, err := signer.SignFileContext(cli.Ctx(cmd), tmp)
 		os.Remove(tmp) // the downloaded copy is no longer needed once signed
 		if err != nil {
 			cleanupAll()
