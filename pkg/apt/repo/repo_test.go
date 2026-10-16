@@ -2,7 +2,9 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -567,5 +569,48 @@ func TestExplicitArchitecturesRetireOne(t *testing.T) {
 	}
 	if got := strings.Join(rel.Architectures(), ","); got != "arm64" {
 		t.Errorf("Architectures = %q; want the explicitly named arm64 alone", got)
+	}
+}
+
+// An index that decodes to more than the Release says its uncompressed form
+// is must be refused before it is all in memory: a small xz or zstd file can
+// otherwise expand to many gigabytes.
+func TestOpenBoundsIndexDecompressionByTheRelease(t *testing.T) {
+	r, dir := newRepo(t, Options{})
+	if _, err := r.AddDeb(ref(t, "hello_2.10-3_all.deb")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Commit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	relPath := filepath.Join(dir, aptdata.ReleasePath("bookworm"))
+	data, err := os.ReadFile(relPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, err := aptdata.ParseRelease(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shrunk := 0
+	for i, f := range rel.Files {
+		// One byte short: still larger than the compressed forms, so one of
+		// those is what gets fetched and decoded.
+		if path.Base(f.Path) == "Packages" {
+			rel.Files[i].Size--
+			shrunk++
+		}
+	}
+	if shrunk == 0 {
+		t.Fatal("the Release lists no uncompressed Packages index")
+	}
+	if err := os.WriteFile(relPath, rel.Render(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(dir, aptdata.InReleasePath("bookworm")))
+
+	_, err = Open(context.Background(), dir, Options{Suite: "bookworm"})
+	if !errors.Is(err, aptdata.ErrTooLarge) {
+		t.Fatalf("Open with an index larger than its Release entry = %v, want ErrTooLarge", err)
 	}
 }
