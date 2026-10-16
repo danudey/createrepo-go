@@ -108,7 +108,11 @@ func PackageFromFile(localPath string, opts Options) (*aptdata.Package, error) {
 	}
 	aptdata.SetChecksums(pkg, size, hashes)
 
-	pkg.SetLocation(poolLocation(pkg, localPath, opts))
+	loc, err := poolLocation(pkg, localPath, opts)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", localPath, err)
+	}
+	pkg.SetLocation(loc)
 	aptdata.CanonicalizePackage(pkg)
 	return pkg, nil
 }
@@ -119,7 +123,20 @@ func PackageFromFile(localPath string, opts Options) (*aptdata.Package, error) {
 // the local file happens to be called, so a package built into a
 // differently-named artifact still lands under a name apt and a human both
 // recognize, and so re-adding the same build resolves to the same path.
-func poolLocation(pkg *aptdata.Package, localPath string, opts Options) string {
+//
+// Every part of the path comes from the package's control file, which is not
+// trusted, so each is checked to be a single path segment: a Package or Source
+// of "../../x" would otherwise place the file outside the pool.
+func poolLocation(pkg *aptdata.Package, localPath string, opts Options) (string, error) {
+	if err := aptdata.ValidPackageName(pkg.Name()); err != nil {
+		return "", err
+	}
+	if err := aptdata.ValidPackageName(pkg.SourceName()); err != nil {
+		return "", fmt.Errorf("source: %w", err)
+	}
+	if err := aptdata.ValidArch(pkg.Arch()); err != nil {
+		return "", err
+	}
 	ext := strings.ToLower(path.Ext(localPath))
 	if ext != extDeb && ext != extUdeb {
 		ext = extDeb
@@ -129,15 +146,18 @@ func poolLocation(pkg *aptdata.Package, localPath string, opts Options) string {
 	v := pkg.ParsedVersion()
 	v.Epoch = 0
 	filename := fmt.Sprintf("%s_%s_%s%s", pkg.Name(), v.String(), pkg.Arch(), ext)
+	if err := aptdata.ValidFileName(filename); err != nil {
+		return "", err
+	}
 
 	component := opts.Component
 	if component == "" {
 		component = "main"
 	}
 	if !opts.PoolLayout {
-		return path.Join(aptdata.PoolDir, component, filename)
+		return path.Join(aptdata.PoolDir, component, filename), nil
 	}
-	return aptdata.PoolPath(component, pkg.SourceName(), filename)
+	return aptdata.PoolPath(component, pkg.SourceName(), filename), nil
 }
 
 // ControlFromDeb extracts and parses the control stanza from a .deb's control
