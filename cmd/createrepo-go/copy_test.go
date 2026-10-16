@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -211,5 +214,43 @@ func TestNormalizeKeyID(t *testing.T) {
 	}
 	if got := normalizeKeyID("992DF1A087059154"); got != "992df1a087059154" {
 		t.Errorf("a long key id should only be lowercased, got %q", got)
+	}
+}
+
+// A password in the source location opens the source, but must not reach the
+// output or the copy_source recorded in the destination's config file, which
+// is published alongside the repository.
+func TestCopyKeepsTheSourcePasswordPrivate(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	makeRepo(t, src, "")
+	files := http.FileServer(http.Dir(src))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if user, pass, ok := r.BasicAuth(); !ok || user != "mirror" || pass != "s3cret" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		files.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	srcURL := strings.Replace(srv.URL, "http://", "http://mirror:s3cret@", 1) + "/"
+
+	out, err := runCLI(t, "copy", srcURL, dst)
+	if err != nil {
+		t.Fatalf("copy from a password-protected source: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "s3cret") {
+		t.Errorf("the password appeared in the output:\n%s", out)
+	}
+	cfg, err := os.ReadFile(filepath.Join(dst, "createrepo-go.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(cfg), "s3cret") || !strings.Contains(string(cfg), "mirror:xxxxx@") {
+		t.Errorf("copy_source should record the location with its password redacted:\n%s", cfg)
+	}
+
+	// Resuming from the same location still matches the redacted record.
+	if out, err := runCLI(t, "copy", srcURL, dst, "--continue"); err != nil {
+		t.Errorf("--continue from the same location: %v\n%s", err, out)
 	}
 }

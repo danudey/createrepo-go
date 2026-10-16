@@ -132,9 +132,14 @@ func runCopy(cmd *cobra.Command, srcLoc, dstLoc string, cf *copyFlags) error {
 	if err := cf.validate(); err != nil {
 		return err
 	}
+	// Only opening a backend needs a password given in a location. Every
+	// other use prints it or records it in the published config file, so
+	// from here on the locations are the redacted ones.
+	srcURL, dstURL := srcLoc, dstLoc
+	srcLoc, dstLoc = backend.Redact(srcLoc), backend.Redact(dstLoc)
 
 	// --- source ---------------------------------------------------------
-	srcBE, err := backend.Open(cli.Ctx(cmd), srcLoc)
+	srcBE, err := backend.Open(cli.Ctx(cmd), srcURL)
 	if err != nil {
 		return err
 	}
@@ -182,7 +187,7 @@ func runCopy(cmd *cobra.Command, srcLoc, dstLoc string, cf *copyFlags) error {
 	}
 
 	// --- destination state ----------------------------------------------
-	dstBE, err := backend.Open(cli.Ctx(cmd), dstLoc)
+	dstBE, err := backend.Open(cli.Ctx(cmd), dstURL)
 	if err != nil {
 		return err
 	}
@@ -375,8 +380,12 @@ func checkResumable(cmd *cobra.Command, srcLoc string, dstBE backend.Backend, ds
 	if err != nil {
 		return err
 	}
-	if dstCfg != nil && dstCfg.CopySource != "" && dstCfg.CopySource != srcLoc {
-		return fmt.Errorf("--continue: %s was copied from %s, not from %s", dstBE, dstCfg.CopySource, srcLoc)
+	// A config written before locations were redacted holds the password;
+	// redacting it here keeps --continue working for such a copy.
+	if dstCfg != nil && dstCfg.CopySource != "" {
+		if recorded := backend.Redact(dstCfg.CopySource); recorded != srcLoc {
+			return fmt.Errorf("--continue: %s was copied from %s, not from %s", dstBE, recorded, srcLoc)
+		}
 	}
 	if !dstExists {
 		return nil
