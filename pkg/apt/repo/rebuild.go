@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"fmt"
 	"path"
 	"strings"
 
@@ -93,9 +94,16 @@ func (r *Repo) PruneOlderVersions() PruneReport {
 // already where it belongs is left untouched, so calling this repeatedly is
 // idempotent. Commit performs the actual moves server-side (no re-upload) where
 // the backend supports it.
-func (r *Repo) RelocateAll() int {
+//
+// The pool directory comes from each entry's source package name, which may
+// have been copied from another repository's indexes, so a name that is not a
+// single path segment is an error rather than a path outside the pool.
+func (r *Repo) RelocateAll() (int, error) {
 	moved := 0
 	for _, p := range r.idx.Packages() {
+		if err := aptdata.ValidPackageName(p.SourceName()); err != nil {
+			return moved, fmt.Errorf("%s: source: %w", p.ID3(), err)
+		}
 		want := path.Join(r.poolDir(p.Component, p.SourceName()), path.Base(p.Location()))
 		if want != p.Location() {
 			p.SetLocation(want)
@@ -103,13 +111,16 @@ func (r *Repo) RelocateAll() int {
 		}
 	}
 	for _, s := range r.idx.Sources() {
+		if err := aptdata.ValidPackageName(s.Name()); err != nil {
+			return moved, fmt.Errorf("%s: %w", s.ID3(), err)
+		}
 		want := r.poolDir(s.Component, s.Name())
 		if want != s.Directory() {
 			s.SetDirectory(want)
 			moved++
 		}
 	}
-	return moved
+	return moved, nil
 }
 
 // poolDir returns the directory a component's files belong in under the current

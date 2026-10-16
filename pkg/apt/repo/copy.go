@@ -317,6 +317,13 @@ func (r *Repo) CopyEntriesFrom(ctx context.Context, src backend.Backend, entries
 		if err != nil {
 			return nil, err
 		}
+		// A relocated destination is built from the entry's package name,
+		// which comes from the source's indexes too.
+		for _, m := range moves {
+			if err := backend.CheckPath(m.to); err != nil {
+				return nil, fmt.Errorf("%s: %w", e.ID3(), err)
+			}
+		}
 
 		for _, m := range moves {
 			if err := r.copyOneFile(ctx, src, e, m, opt, stats, report); err != nil {
@@ -440,6 +447,9 @@ func (r *Repo) placeCopy(e aptdata.Entry, opt EntryCopyOptions) (aptdata.Entry, 
 		from := t.Location()
 		to := from
 		if opt.Relocate || opt.Component != "" {
+			if err := aptdata.ValidPackageName(cp.SourceName()); err != nil {
+				return nil, nil, fmt.Errorf("%s: source: %w", e.ID3(), err)
+			}
 			to = path.Join(r.poolDir(component, cp.SourceName()), path.Base(from))
 		}
 		cp.SetLocation(to)
@@ -452,6 +462,9 @@ func (r *Repo) placeCopy(e aptdata.Entry, opt EntryCopyOptions) (aptdata.Entry, 
 		fromDir := t.Directory()
 		toDir := fromDir
 		if opt.Relocate || opt.Component != "" {
+			if err := aptdata.ValidPackageName(cp.Name()); err != nil {
+				return nil, nil, fmt.Errorf("%s: %w", e.ID3(), err)
+			}
 			toDir = r.poolDir(component, cp.Name())
 		}
 		cp.SetDirectory(toDir)
