@@ -106,7 +106,7 @@ func writePrimaryPackage(b *bytes.Buffer, p *Package) {
 	fmt.Fprintf(b, "  <version epoch=\"%d\" ver=\"%s\" rel=\"%s\"/>\n",
 		p.Epoch, escapeAttr(p.Version), escapeAttr(p.Release))
 	fmt.Fprintf(b, "  <checksum type=\"%s\" pkgid=\"YES\">%s</checksum>\n",
-		p.ChecksumType, p.PkgID)
+		escapeAttr(p.ChecksumType), escapeText(p.PkgID))
 	fmt.Fprintf(b, "  <summary>%s</summary>\n", escapeText(p.Summary))
 	fmt.Fprintf(b, "  <description>%s</description>\n", escapeText(p.Description))
 	fmt.Fprintf(b, "  <packager>%s</packager>\n", escapeText(p.Packager))
@@ -146,7 +146,7 @@ func writeEntries(b *bytes.Buffer, tag string, entries []Entry) {
 		b.WriteString("      <rpm:entry")
 		fmt.Fprintf(b, " name=\"%s\"", escapeAttr(e.Name))
 		if e.Flags != "" {
-			fmt.Fprintf(b, " flags=\"%s\"", e.Flags)
+			fmt.Fprintf(b, " flags=\"%s\"", escapeAttr(e.Flags))
 			fmt.Fprintf(b, " epoch=\"%d\"", e.Epoch)
 			if e.Ver != "" {
 				fmt.Fprintf(b, " ver=\"%s\"", escapeAttr(e.Ver))
@@ -165,7 +165,7 @@ func writeEntries(b *bytes.Buffer, tag string, entries []Entry) {
 
 func writeFile(b *bytes.Buffer, indent string, f File) {
 	if f.Type != "" {
-		fmt.Fprintf(b, "%s<file type=\"%s\">%s</file>\n", indent, f.Type, escapeText(f.Path))
+		fmt.Fprintf(b, "%s<file type=\"%s\">%s</file>\n", indent, escapeAttr(f.Type), escapeText(f.Path))
 	} else {
 		fmt.Fprintf(b, "%s<file>%s</file>\n", indent, escapeText(f.Path))
 	}
@@ -178,7 +178,7 @@ func WriteFilelists(pkgs []*Package) []byte {
 	fmt.Fprintf(&b, `<filelists xmlns="%s" packages="%d">`+"\n", NSFilelists, len(pkgs))
 	for _, p := range pkgs {
 		fmt.Fprintf(&b, "<package pkgid=\"%s\" name=\"%s\" arch=\"%s\">\n",
-			p.PkgID, escapeAttr(p.Name), escapeAttr(p.Arch))
+			escapeAttr(p.PkgID), escapeAttr(p.Name), escapeAttr(p.Arch))
 		fmt.Fprintf(&b, "  <version epoch=\"%d\" ver=\"%s\" rel=\"%s\"/>\n",
 			p.Epoch, escapeAttr(p.Version), escapeAttr(p.Release))
 		for _, f := range p.Files {
@@ -197,7 +197,7 @@ func WriteOther(pkgs []*Package) []byte {
 	fmt.Fprintf(&b, `<otherdata xmlns="%s" packages="%d">`+"\n", NSOther, len(pkgs))
 	for _, p := range pkgs {
 		fmt.Fprintf(&b, "<package pkgid=\"%s\" name=\"%s\" arch=\"%s\">\n",
-			p.PkgID, escapeAttr(p.Name), escapeAttr(p.Arch))
+			escapeAttr(p.PkgID), escapeAttr(p.Name), escapeAttr(p.Arch))
 		fmt.Fprintf(&b, "  <version epoch=\"%d\" ver=\"%s\" rel=\"%s\"/>\n",
 			p.Epoch, escapeAttr(p.Version), escapeAttr(p.Release))
 		for _, c := range p.Changelogs {
@@ -235,9 +235,10 @@ func WriteRepomd(r *Repomd) []byte {
 	fmt.Fprintf(&b, `<repomd xmlns="%s" xmlns:rpm="%s">`+"\n", NSRepo, NSRPM)
 	fmt.Fprintf(&b, "  <revision>%s</revision>\n", escapeText(r.Revision))
 	for _, d := range r.Data {
-		fmt.Fprintf(&b, "  <data type=\"%s\">\n", d.Type)
-		fmt.Fprintf(&b, "    <checksum type=\"%s\">%s</checksum>\n", d.ChecksumType, d.Checksum)
-		fmt.Fprintf(&b, "    <open-checksum type=\"%s\">%s</open-checksum>\n", d.ChecksumType, d.OpenChecksum)
+		fmt.Fprintf(&b, "  <data type=\"%s\">\n", escapeAttr(d.Type))
+		fmt.Fprintf(&b, "    <checksum type=\"%s\">%s</checksum>\n", escapeAttr(d.ChecksumType), escapeText(d.Checksum))
+		fmt.Fprintf(&b, "    <open-checksum type=\"%s\">%s</open-checksum>\n",
+			escapeAttr(d.ChecksumType), escapeText(d.OpenChecksum))
 		fmt.Fprintf(&b, "    <location href=\"%s\"/>\n", escapeAttr(d.Location))
 		fmt.Fprintf(&b, "    <timestamp>%d</timestamp>\n", d.Timestamp)
 		fmt.Fprintf(&b, "    <size>%d</size>\n", d.Size)
