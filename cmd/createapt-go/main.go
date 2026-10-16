@@ -6,12 +6,16 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/danudey/createrepo-go/internal/cli"
 	"github.com/danudey/createrepo-go/pkg/backend"
 )
 
 func main() {
 	backend.SetAppName("createapt-go")
-	if err := rootCmd().Execute(); err != nil {
+	ctx, stop := cli.SignalContext()
+	err := rootCmd().ExecuteContext(ctx)
+	stop()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}

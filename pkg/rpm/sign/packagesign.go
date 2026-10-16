@@ -3,12 +3,14 @@ package sign
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/danudey/createrepo-go/pkg/gpg"
 	"github.com/danudey/createrepo-go/pkg/rpm/pkgcheck"
@@ -70,7 +72,13 @@ func NewPackageSignerKeyFile(keyFile, passphrase string) (*PackageSigner, error)
 		os.RemoveAll(home)
 		return nil, err
 	}
-	cleanup := func() { os.RemoveAll(home) }
+	cleanup := func() {
+		// gpg starts an agent for the home on first use, and the agent
+		// keeps the imported secret key in memory after the home is gone.
+		// Stopping it is best effort: gpgconf may not be installed.
+		_ = exec.Command("gpgconf", "--homedir", home, "--kill", "gpg-agent").Run()
+		os.RemoveAll(home)
+	}
 
 	imp := exec.Command(gpg.Binary(), "--homedir", home, "--batch", "--yes", "--import", keyFile)
 	if out, err := imp.CombinedOutput(); err != nil {
@@ -95,6 +103,13 @@ func (s *PackageSigner) Close() {
 // SignFile copies src to a temporary file, signs the copy with rpmsign, and
 // returns the path of the signed copy plus a cleanup function.
 func (s *PackageSigner) SignFile(src string) (string, func(), error) {
+	return s.SignFileContext(context.Background(), src)
+}
+
+// SignFileContext is SignFile, stopping rpmsign when ctx is cancelled. A
+// cancelled signing returns an error like any other failure, so the
+// passphrase file and the temporary copy are removed on the way out.
+func (s *PackageSigner) SignFileContext(ctx context.Context, src string) (string, func(), error) {
 	// A signature vouches for the package, so a damaged one is never signed:
 	// rpmsign signs the header alone and would happily vouch for a payload
 	// that no longer matches it. A bad existing signature is no obstacle to
@@ -122,7 +137,8 @@ func (s *PackageSigner) SignFile(src string) (string, func(), error) {
 	// up signed only by the new key (rpmsign --addsign otherwise leaves a prior
 	// key's header signature alongside the new one).
 	if s.Replace {
-		del := exec.Command("rpmsign", "--delsign", dst)
+		del := exec.CommandContext(ctx, "rpmsign", "--delsign", dst)
+		del.WaitDelay = cancelWait
 		if s.gpgHome != "" {
 			del.Env = append(os.Environ(), "GNUPGHOME="+s.gpgHome)
 		}
@@ -139,7 +155,7 @@ func (s *PackageSigner) SignFile(src string) (string, func(), error) {
 	// not exist on rpm 4.x (which already writes the compatible signature), so
 	// it is added only when the local rpmsign advertises it. For the openpgp
 	// format we leave the host default in place.
-	if s.Format != SigOpenPGP && rpmsignSupportsRPMV4() {
+	if s.Format != SigOpenPGP && rpmsignSupportsRPMV4(ctx) {
 		args = append(args, "--rpmv4")
 	}
 	if s.gpgHome != "" {
@@ -172,7 +188,8 @@ func (s *PackageSigner) SignFile(src string) (string, func(), error) {
 	}
 	args = append(args, dst)
 
-	cmd := exec.Command("rpmsign", args...)
+	cmd := exec.CommandContext(ctx, "rpmsign", args...)
+	cmd.WaitDelay = cancelWait
 	cmd.Env = env
 	if s.gpgHome != "" {
 		cmd.Env = append(cmd.Env, "GNUPGHOME="+s.gpgHome)
@@ -219,10 +236,17 @@ func macroQuote(p string) string {
 	return "'" + strings.ReplaceAll(p, "%", "%%") + "'"
 }
 
+// cancelWait bounds how long a cancelled rpmsign may keep its output open.
+// Cancelling kills rpmsign but not the gpg it started, which holds the same
+// pipe; without a bound, collecting the output would wait for gpg to finish.
+const cancelWait = 2 * time.Second
+
 // rpmsignSupportsRPMV4 reports whether the local rpmsign understands the
 // --rpmv4 compatibility flag (rpm 6+).
-func rpmsignSupportsRPMV4() bool {
-	out, _ := exec.Command("rpmsign", "--help").CombinedOutput()
+func rpmsignSupportsRPMV4(ctx context.Context) bool {
+	cmd := exec.CommandContext(ctx, "rpmsign", "--help")
+	cmd.WaitDelay = cancelWait
+	out, _ := cmd.CombinedOutput()
 	return strings.Contains(string(out), "--rpmv4")
 }
 

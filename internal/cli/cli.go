@@ -9,14 +9,34 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
 	"github.com/danudey/createrepo-go/pkg/checkcore"
 	"github.com/danudey/createrepo-go/pkg/progress"
 )
+
+// SignalContext returns a context that is cancelled by the first SIGINT or
+// SIGTERM, and a function that releases it.
+//
+// Left to the default handling, either signal ends the process on the spot:
+// no deferred function runs, so a passphrase file, an imported private key or
+// a half-written temporary file stays on disk. Caught instead, the signal
+// cancels the context, the running operation fails with that error, and the
+// cleanups run as it returns. Catching stops after the first signal, so a
+// second one still ends the process at once.
+func SignalContext() (context.Context, func()) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	return ctx, stop
+}
 
 // Ctx returns the command's context, or a background one when it has none.
 func Ctx(cmd *cobra.Command) context.Context {
