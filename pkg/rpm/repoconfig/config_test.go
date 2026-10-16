@@ -70,3 +70,28 @@ func TestSaveOverwrites(t *testing.T) {
 		t.Errorf("overwrite failed: got %+v", *got)
 	}
 }
+
+// The config is read from repositories this tool does not control, so a key id
+// that gpg would parse as an option, or rpm would expand as a macro, must be
+// refused on load. A fingerprint pinned with gpg's trailing "!" is accepted.
+func TestLoadChecksTheKeyID(t *testing.T) {
+	for keyID, ok := range map[string]bool{
+		"ABCDEF0123456789ABCDEF0123456789ABCDEF01!": true,
+		"0xABCDEF0123456789":                        true,
+		"--output=/home/me/.bashrc":                 false,
+		"%(touch PWNED)":                            false,
+		"CR Test <cr-test@example.com>":             false,
+	} {
+		be := newBackend(t)
+		if err := Save(context.Background(), be, &Config{SignPackages: true, GPGKeyID: keyID}); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(context.Background(), be)
+		if ok && (err != nil || cfg.GPGKeyID != keyID) {
+			t.Errorf("Load with gpg_key_id %q = (%+v, %v), want it accepted", keyID, cfg, err)
+		}
+		if !ok && err == nil {
+			t.Errorf("Load accepted gpg_key_id %q", keyID)
+		}
+	}
+}

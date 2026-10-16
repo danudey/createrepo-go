@@ -11,8 +11,10 @@ package repoconfig
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/danudey/createrepo-go/pkg/configfile"
+	"github.com/danudey/createrepo-go/pkg/gpg"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
 )
@@ -75,8 +77,21 @@ type Config struct {
 // Load reads the configuration file from the backend. A repository with no
 // config file yields (nil, nil) so callers can treat it as "no recorded
 // defaults".
+//
+// The file is read from repositories this tool does not control (copy and
+// check load the source's), so a recorded key id that is not a hexadecimal
+// key id or fingerprint is refused rather than handed to gpg.
 func Load(ctx context.Context, be backend.Backend) (*Config, error) {
-	return configfile.Load[Config](ctx, be, Path)
+	cfg, err := configfile.Load[Config](ctx, be, Path)
+	if err != nil || cfg == nil {
+		return cfg, err
+	}
+	if cfg.GPGKeyID != "" {
+		if err := gpg.CheckKeyID(cfg.GPGKeyID); err != nil {
+			return nil, fmt.Errorf("%s: gpg_key_id: %w", Path, err)
+		}
+	}
+	return cfg, nil
 }
 
 // Save writes cfg to the backend as pretty-printed JSON.

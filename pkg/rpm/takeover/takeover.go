@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
+	"github.com/danudey/createrepo-go/pkg/gpg"
 	"github.com/danudey/createrepo-go/pkg/rpm/repo"
 	"github.com/danudey/createrepo-go/pkg/rpm/repoconfig"
 	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
@@ -966,9 +967,12 @@ func (a *analysis) proposeConfig() {
 	cfg.SignPackages = a.opt.SignPackages
 	if a.opt.SignMetadata || a.opt.SignPackages {
 		cfg.SignatureFormat = a.opt.SignatureFormat
+		// Only a key id or fingerprint is recorded: repoconfig.Load refuses
+		// anything else, so recording a uid would make the repository's
+		// config unreadable.
 		if fpr, err := sign.Fingerprint("", a.opt.GPGKeyID); err == nil && fpr != "" {
 			cfg.GPGKeyID = fpr
-		} else if a.opt.GPGKeyID != "" {
+		} else if gpg.CheckKeyID(a.opt.GPGKeyID) == nil {
 			cfg.GPGKeyID = a.opt.GPGKeyID
 		}
 	}

@@ -196,7 +196,7 @@ const gpgRecordFpr = "fpr"
 // in the local keyring the identifier itself is all we can offer.
 func KeyAndSubkeyIDs(keyID string) []string {
 	self := longKeyID(keyID)
-	cmd := gpg.Command("--with-colons", "--list-keys", keyID)
+	cmd := gpg.Command("--with-colons", "--list-keys", "--", keyID)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
@@ -219,13 +219,7 @@ func KeyAndSubkeyIDs(keyID string) []string {
 
 // longKeyID reduces a fingerprint to the lowercase 16-hex long key id that a
 // signature packet carries, leaving anything shorter alone.
-func longKeyID(s string) string {
-	s = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(s), " ", ""))
-	if len(s) > 16 {
-		return s[len(s)-16:]
-	}
-	return s
-}
+func longKeyID(s string) string { return gpg.LongKeyID(s) }
 
 // VerifyDetached checks an ASCII-armored detached signature over data against
 // the public keys in the given keyring files. It returns the fingerprint of the
