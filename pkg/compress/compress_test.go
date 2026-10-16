@@ -3,6 +3,7 @@ package compress
 import (
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"io"
 	"testing"
 
@@ -80,5 +81,19 @@ func TestDecompressStreamHandlesShortInput(t *testing.T) {
 	got, _ := io.ReadAll(rc)
 	if string(got) != "x" {
 		t.Errorf("got %q, want %q", got, "x")
+	}
+}
+
+// A limit stops decoding of a document that expands past it, whatever its
+// format, so a small hostile file cannot fill memory.
+func TestDecompressLimit(t *testing.T) {
+	for _, f := range []format{plain, gzipFormat, zstdFormat, xzFormat} {
+		data := encode(t, f)
+		if out, err := DecompressLimit("doc", data, int64(len(doc))); err != nil || string(out) != doc {
+			t.Errorf("%s at the limit: got (%q, %v), want the document", f, out, err)
+		}
+		if _, err := DecompressLimit("doc", data, int64(len(doc))-1); !errors.Is(err, ErrTooLarge) {
+			t.Errorf("%s over the limit: got %v, want ErrTooLarge", f, err)
+		}
 	}
 }

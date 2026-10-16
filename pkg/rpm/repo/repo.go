@@ -8,10 +8,13 @@ package repo
 
 import (
 	"context"
+	"crypto/sha1" // #nosec G505 -- rpm-md repositories may still use sha1 checksums
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"path"
 	"strings"
 
@@ -225,7 +228,59 @@ func (r *Repo) loadData(ctx context.Context, repomd *repodata.Repomd, typ string
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s metadata %s: %w", typ, d.Location, err)
 	}
-	return compress.Decompress(d.Location, raw)
+	// repomd.xml is the only file a signature covers; what makes the rest
+	// trustworthy is that their checksums in it match. Without this check a
+	// mirror could serve any primary.xml under a correctly signed repomd.xml.
+	if err := checkDigest(d.ChecksumType, d.Checksum, raw); err != nil {
+		return nil, fmt.Errorf("%s metadata %s: %w", typ, d.Location, err)
+	}
+	limit := int64(maxMetadataSize)
+	if d.OpenSize > 0 && d.OpenSize < limit {
+		limit = d.OpenSize
+	}
+	data, err := compress.DecompressLimit(d.Location, raw, limit)
+	if err != nil {
+		return nil, fmt.Errorf("%s metadata: %w", typ, err)
+	}
+	if d.OpenChecksum != "" {
+		if err := checkDigest(d.ChecksumType, d.OpenChecksum, data); err != nil {
+			return nil, fmt.Errorf("%s metadata %s (decompressed): %w", typ, d.Location, err)
+		}
+	}
+	return data, nil
+}
+
+// maxMetadataSize bounds a decompressed metadata document when repomd.xml
+// gives no smaller open-size. Fedora's largest, filelists.xml, is well under
+// 1 GiB.
+const maxMetadataSize = 4 << 30
+
+// checkDigest reports whether data has the hex digest want under the named
+// rpm-md checksum type.
+func checkDigest(typ, want string, data []byte) error {
+	if want == "" {
+		return errors.New("repomd.xml gives no checksum for it")
+	}
+	var h hash.Hash
+	switch strings.ToLower(typ) {
+	case "sha", "sha1":
+		h = sha1.New() // #nosec G401 -- an rpm-md checksum type, only compared
+	case "sha224":
+		h = sha256.New224()
+	case "sha256":
+		h = sha256.New()
+	case "sha384":
+		h = sha512.New384()
+	case "sha512":
+		h = sha512.New()
+	default:
+		return fmt.Errorf("unsupported checksum type %q", typ)
+	}
+	h.Write(data)
+	if got := hex.EncodeToString(h.Sum(nil)); !strings.EqualFold(got, want) {
+		return fmt.Errorf("%s checksum mismatch: repomd.xml says %s, got %s", typ, want, got)
+	}
+	return nil
 }
 
 // MetadataDocument returns the decompressed contents of the metadata document
