@@ -10,6 +10,7 @@ import (
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
 	"github.com/danudey/createrepo-go/pkg/apt/repo"
+	"github.com/danudey/createrepo-go/pkg/apt/repoconfig"
 	"github.com/danudey/createrepo-go/pkg/progress"
 )
 
@@ -133,6 +134,12 @@ func verifyCmd() *cobra.Command {
 and checksum they record, and that the repository's intra-repository
 dependencies are satisfied. Nothing is modified.
 
+The Release signature is checked first, against --keyring or the key the
+repository's config records: InRelease and Release.gpg are both verified when
+present, and InRelease must sign the same text as Release. With no key, a
+missing or unverifiable signature is a warning; --verify-sigs makes it a
+problem.
+
 How far the checksum check goes depends on the backend:
 
   local disk, SSH/SFTP  the checksum is computed from the stored file (over SSH
@@ -156,6 +163,18 @@ it had been verified.`,
 			}
 			defer r.Close()
 
+			// The Release signature is what makes the rest trustworthy, so
+			// it is checked first. A bad one is reported with the other
+			// problems rather than stopping the run, so one pass shows
+			// everything that is wrong.
+			cfg, err := repoconfig.Load(cli.Ctx(cmd), r.Backend())
+			if err != nil {
+				return err
+			}
+			keyrings, releaseKeys := verificationKeyrings(cmd, cfg)
+			defer releaseKeys()
+			_, sigErr := verifyReleaseSignature(cmd, r, keyrings, "the")
+
 			out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 			mode := repo.ChecksumCheap
 			if checksums {
@@ -173,11 +192,16 @@ it had been verified.`,
 			if err != nil {
 				return err
 			}
+			problems := len(res.Problems)
+			if sigErr != nil {
+				fmt.Fprintln(errOut, "PROBLEM: release signature:", sigErr)
+				problems++
+			}
 			for _, p := range res.Problems {
 				fmt.Fprintln(errOut, "PROBLEM:", p)
 			}
-			if !res.OK() {
-				return fmt.Errorf("%d problem(s) found", len(res.Problems))
+			if problems > 0 {
+				return fmt.Errorf("%d problem(s) found", problems)
 			}
 			fmt.Fprintln(out, verifySummary(res))
 			return nil

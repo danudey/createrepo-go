@@ -502,9 +502,9 @@ than replicate them, and the run reports which one did.
 ### Verification and signing
 
 If the source repository records a signing key in its `createapt-go.json`, or
-you supply one with `--keyring`, the copy verifies the source's `InRelease`
-(preferred, because it is one document, so what was verified is exactly what was
-read) or its detached `Release.gpg`. Verification is automatic; `--verify-sigs`
+you supply one with `--keyring`, the copy verifies the source's `InRelease` and
+its detached `Release.gpg`, whichever are present, and checks that the text
+`InRelease` signs is the `Release` file. Verification is automatic; `--verify-sigs`
 makes a missing key or an unsigned source an error rather than a warning, and
 `--skip-verify` turns it off.
 
@@ -609,6 +609,14 @@ createapt-go add /srv/repo dist/*.deb
 `verify` checks that every file the indexes reference is present with the size
 and checksum recorded, and that the repository's intra-repository dependencies
 are satisfied. It modifies nothing.
+
+It first checks the suite's `Release` signature, in the same way `copy` checks a
+source: against `--keyring`, or else the key `createapt-go.json` records. Both
+`InRelease` and `Release.gpg` are verified when present. The text `InRelease`
+signs must be the `Release` file, because clients that fall back to `Release`
+would otherwise read a document that nobody signed. With no key available, an
+unsigned or unverifiable suite is a warning. With `--verify-sigs`, it is a
+problem.
 
 ```sh
 createapt-go verify /srv/repo
