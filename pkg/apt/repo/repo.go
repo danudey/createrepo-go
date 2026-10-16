@@ -16,8 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/danudey/createrepo-go/pkg/xfer"
-
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
 	"github.com/danudey/createrepo-go/pkg/apt/debmeta"
 	"github.com/danudey/createrepo-go/pkg/backend"
@@ -406,7 +404,7 @@ func (r *Repo) fetchIndex(ctx context.Context, suite string, ref indexRef) ([]by
 	if err := verifyIndexBytes(ref, raw); err != nil {
 		return nil, fmt.Errorf("index %s: %w", ref.Path, err)
 	}
-	data, err := aptdata.Decompress(ref.Path, raw)
+	data, err := aptdata.DecompressLimit(ref.Path, raw, r.old.DecodedLimit(ref.Path))
 	if err != nil {
 		return nil, fmt.Errorf("index %s: %w", ref.Path, err)
 	}
@@ -590,9 +588,15 @@ func (r *Repo) nowUnix() int64 {
 }
 
 // getAll reads an object fully into memory (indexes are small relative to the
-// packages they describe).
+// packages they describe). It is only used for indexes and Release files, so
+// it refuses anything larger than any of those can reasonably be.
 func (r *Repo) getAll(ctx context.Context, relpath string) ([]byte, error) {
-	return xfer.ReadAll(ctx, r.be, relpath)
+	rc, err := r.be.Get(ctx, relpath)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return aptdata.ReadLimit(relpath, rc, aptdata.MaxIndexSize)
 }
 
 // sortedMapKeys returns a map's keys in order.
