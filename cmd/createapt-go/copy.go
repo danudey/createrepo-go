@@ -148,7 +148,7 @@ func runCopy(cmd *cobra.Command, srcLoc, dstLoc string, cf *copyFlags) error {
 	keyrings, releaseKeys := verificationKeyrings(cmd, srcCfg)
 	defer releaseKeys()
 
-	sourceSigned, err := verifySourceRelease(cmd, src, keyrings)
+	sourceSigned, err := verifyReleaseSignature(cmd, src, keyrings, "the source's")
 	if err != nil {
 		return err
 	}
@@ -274,9 +274,9 @@ func suiteExists(cmd *cobra.Command, be backend.Backend, suite string) (bool, er
 	return false, nil
 }
 
-// verificationKeyrings resolves the public keys the copy validates against: the
-// ones the user supplied with --keyring, or failing that the source
-// repository's own signing key, exported from the local GnuPG keyring by the
+// verificationKeyrings resolves the public keys a repository being read is
+// validated against: the ones the user supplied with --keyring, or failing that
+// the repository's own signing key, exported from the local GnuPG keyring by the
 // fingerprint recorded in its config. A key that cannot be resolved is a
 // warning, not an error — verification is then simply not possible.
 func verificationKeyrings(cmd *cobra.Command, srcCfg *repoconfig.Config) ([]string, func()) {
@@ -292,70 +292,12 @@ func verificationKeyrings(cmd *cobra.Command, srcCfg *repoconfig.Config) ([]stri
 	}
 	path, cleanup, err := sign.ExportPublicKeyToFile(srcCfg.GPGKeyID)
 	if err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: the source repository is signed with %s but that key is not available locally (%v); signatures will not be verified. Pass --keyring to supply it.\n",
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: the repository is signed with %s but that key is not available locally (%v); signatures will not be verified. Pass --keyring to supply it.\n",
 			srcCfg.GPGKeyID, err)
 		return nil, noop
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "verifying against the source's recorded signing key %s\n", srcCfg.GPGKeyID)
+	fmt.Fprintf(cmd.OutOrStdout(), "verifying against the repository's recorded signing key %s\n", srcCfg.GPGKeyID)
 	return []string{path}, cleanup
-}
-
-// verifySourceRelease checks the source suite's Release signature, in whichever
-// of its two forms is present. It reports whether the source is signed at all,
-// which decides later whether a transforming copy must be re-signed.
-func verifySourceRelease(cmd *cobra.Command, src *repo.Repo, keyrings []string) (bool, error) {
-	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
-
-	inRelease, detached, err := src.ReleaseSignatures(cli.Ctx(cmd))
-	if err != nil {
-		return false, fmt.Errorf("reading the source's Release signature: %w", err)
-	}
-	signed := inRelease != nil || detached != nil
-
-	if gf.skipVerify {
-		if signed {
-			fmt.Fprintln(errOut, "warning: --skip-verify: the source's Release signature is not being checked")
-		}
-		return signed, nil
-	}
-	if len(keyrings) == 0 {
-		if gf.verifySigs {
-			return signed, fmt.Errorf("--verify-sigs needs a public key: pass --keyring, or copy a repository whose %s records its signing key", repoconfig.Path)
-		}
-		if signed {
-			fmt.Fprintf(errOut, "warning: the source's Release is signed but no public key is available to check it; pass --keyring to verify the copy\n")
-		}
-		return signed, nil
-	}
-	if !signed {
-		if gf.verifySigs {
-			return false, fmt.Errorf("--verify-sigs: the source suite %s carries no Release signature", src.Suite())
-		}
-		fmt.Fprintf(errOut, "warning: the source's Release is not signed (no InRelease or Release.gpg)\n")
-		return false, nil
-	}
-
-	// InRelease is preferred: it is one document, so what was verified is
-	// exactly what was read.
-	if inRelease != nil {
-		if _, fpr, err := sign.VerifyClearsigned(inRelease, keyrings); err != nil {
-			return true, fmt.Errorf("the source's InRelease signature does not verify: %w", err)
-		} else {
-			fmt.Fprintf(out, "verified: InRelease signed by %s\n", fpr)
-			return true, nil
-		}
-	}
-
-	raw, err := src.RawRelease(cli.Ctx(cmd))
-	if err != nil {
-		return true, fmt.Errorf("reading the source's Release: %w", err)
-	}
-	fpr, err := sign.VerifyDetached(raw, detached, keyrings)
-	if err != nil {
-		return true, fmt.Errorf("the source's Release.gpg signature does not verify: %w", err)
-	}
-	fmt.Fprintf(out, "verified: Release signed by %s\n", fpr)
-	return true, nil
 }
 
 // checkResumable confirms that --continue is resuming a copy of this same
