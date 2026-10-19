@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
@@ -88,8 +89,17 @@ func (s *Signer) SignDetached(data []byte) ([]byte, error) {
 // SignClearsigned wraps data in an OpenPGP clearsigned document.
 func (s *Signer) SignClearsigned(data []byte) ([]byte, error) {
 	if s.entity != nil {
+		// Sign with the key a detached signature would use: the signing
+		// subkey when there is one. The primary key of a production key is
+		// often certify-only, and a signature from it is one gpgv refuses,
+		// so InRelease (the file apt prefers) would fail where Release.gpg
+		// passed.
+		key, ok := s.entity.SigningKey(time.Now())
+		if !ok {
+			return nil, fmt.Errorf("the signing key has no key usable for signing")
+		}
 		var buf bytes.Buffer
-		w, err := clearsign.Encode(&buf, s.entity.PrivateKey, nil)
+		w, err := clearsign.Encode(&buf, key.PrivateKey, nil)
 		if err != nil {
 			return nil, err
 		}
