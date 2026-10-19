@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"sort"
-	"strings"
 	"syscall"
 	"time"
 )
@@ -310,12 +309,28 @@ func fileModeFromInt64(mode int64) os.FileMode {
 	return fm
 }
 
-func (c *Package) Summary() string {
-	return strings.Join(c.Header.GetTag(1004).StringSlice(), "\n")
-}
+// Summary returns the package summary in the C locale, as rpm and createrepo_c
+// report it.
+func (c *Package) Summary() string { return c.i18nString(1004) }
 
-func (c *Package) Description() string {
-	return strings.Join(c.Header.GetTag(1005).StringSlice(), "\n")
+// Description returns the package description in the C locale.
+func (c *Package) Description() string { return c.i18nString(1005) }
+
+// i18nString picks the C-locale value of an I18NSTRING tag. Such a tag holds
+// one value per locale, in the order of the header's locale table
+// (HEADERI18NTABLE, tag 100), which rpmbuild starts with "C". Joining the
+// values, as this used to, put every translation into the summary.
+func (c *Package) i18nString(tag int) string {
+	values := c.Header.GetTag(tag).StringSlice()
+	if len(values) == 0 {
+		return ""
+	}
+	for i, locale := range c.Header.GetTag(100).StringSlice() {
+		if locale == "C" && i < len(values) {
+			return values[i]
+		}
+	}
+	return values[0]
 }
 
 func (c *Package) BuildTime() time.Time {
