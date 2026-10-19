@@ -55,8 +55,10 @@ func copyExact(cmd *cobra.Command, src *repo.Repo, srcLoc string, srcCfg *repoco
 		prefix = dryRunPrefix
 	}
 	stats, err := repo.CopyExact(cli.Ctx(cmd), src.Backend(), dstBE, objs, repo.CopyOptions{
-		DryRun:  gf.dryRun,
-		Force:   gf.force,
+		DryRun: gf.dryRun,
+		// --overwrite replaces the destination wholesale, so a file that
+		// differs from the source's is expected and is replaced too.
+		Force:   gf.force || cf.overwrite,
 		Prune:   prune,
 		Tracker: prog,
 		Inspect: func(obj repo.SourceObject, local string) error {
