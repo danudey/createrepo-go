@@ -21,6 +21,12 @@ type Verifier struct {
 	// Policy is the release whose rules signatures are judged by. The zero
 	// value accepts every signature format.
 	Policy pkgcheck.Policy
+	// Optional stops requiring a trusted signature: a package passes when it
+	// is intact and none of its signatures is bad or would be refused. An
+	// unsigned package passes, and so does one signed by a key outside the
+	// keyring. It is for a repository that signs its metadata but not its
+	// packages, where packages often carry their vendor's signature or none.
+	Optional bool
 }
 
 // NewVerifier builds a verifier trusting the public keys in the given armored
@@ -51,6 +57,9 @@ func (v *Verifier) VerifyFile(path string) error {
 	}
 	if !res.OK() {
 		return fmt.Errorf("verify %s: bad signature or damaged package: %w", path, res.Err())
+	}
+	if v.Optional {
+		return nil
 	}
 	var untrusted, unreadable []string
 	for _, s := range res.Signatures {
