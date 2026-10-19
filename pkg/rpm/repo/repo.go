@@ -91,7 +91,10 @@ type Repo struct {
 	opt Options
 	idx *repodata.Index
 	old *repodata.Repomd // previously published index, for metadata GC
-	raw []byte           // repomd.xml exactly as loaded (nil for a new repo)
+	// replaced is set by ClearIndex: the next commit replaces the repository
+	// wholesale, so nothing from the previous repomd.xml is carried over.
+	replaced bool
+	raw      []byte // repomd.xml exactly as loaded (nil for a new repo)
 
 	// pending tracks local RPM files to upload, keyed by destination href.
 	pending map[string]string // href -> local path

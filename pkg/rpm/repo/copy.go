@@ -48,11 +48,14 @@ func (r *Repo) MetadataSignature(ctx context.Context) ([]byte, error) {
 // ClearIndex drops every package from the in-memory index while keeping the
 // record of what the published metadata referenced, so that RPMs the new
 // metadata no longer mentions are garbage-collected on Commit. It is used by
-// `copy --overwrite`, which replaces a destination repository wholesale.
+// `copy --overwrite`, which replaces a destination repository wholesale, so
+// the documents Commit would otherwise carry over (comps, updateinfo, ...) are
+// dropped too: they describe the repository being replaced.
 func (r *Repo) ClearIndex() {
 	for _, p := range r.idx.Packages() {
 		r.idx.RemoveByPkgID(p.PkgID)
 	}
+	r.replaced = true
 }
 
 // ObjectKind labels a repository file by the role it plays.

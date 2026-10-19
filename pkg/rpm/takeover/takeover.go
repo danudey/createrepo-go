@@ -223,9 +223,12 @@ func (a *analysis) inventory() {
 	for _, d := range repomd.Data {
 		comp := compressionOf(d.Location)
 		comps = append(comps, comp)
-		fate := "deleted"
-		if generated[d.Type] {
+		fate := "kept"
+		switch {
+		case generated[d.Type]:
 			fate = "regenerated"
+		case repo.DerivedFromPackages(d.Type):
+			fate = "deleted"
 		}
 		pub.Metadata = append(pub.Metadata, MetadataEntry{
 			Type: d.Type, Location: d.Location, Compression: comp,
@@ -277,15 +280,21 @@ func (a *analysis) inventory() {
 	}
 }
 
-// metadataFates reports the documents a republish would drop. The tool
-// generates primary, filelists and other and nothing else, and a commit deletes
-// the files the superseded repomd.xml referenced — so every other document the
-// repository publishes goes away, and its consumers with it.
+// metadataFates reports what a republish does to the documents this tool does
+// not generate. Those that describe the package list (the sqlite and zchunk
+// forms of primary, filelists and other) would go stale, so a commit drops
+// them. Everything else (comps, updateinfo, modulemd, ...) is carried into the
+// new repomd.xml as it is, but no longer updated.
 func (a *analysis) metadataFates() {
 	byImpact := map[string][]string{}
 	worst := map[string]metadataImpact{}
+	var kept []string
 	for _, d := range a.r.Repomd().Data {
 		if generated[d.Type] {
+			continue
+		}
+		if !repo.DerivedFromPackages(d.Type) {
+			kept = append(kept, fmt.Sprintf("%s (%s)", d.Type, d.Location))
 			continue
 		}
 		im := impactOf(d.Type)
@@ -306,6 +315,15 @@ func (a *analysis) metadataFates() {
 			Detail:  im.consequence + ". The superseded files are deleted when the new repomd.xml is published.",
 			Fix:     im.fix,
 			Items:   truncate(byImpact[what], maxItems),
+		})
+	}
+	if len(kept) > 0 {
+		a.rep.add(Finding{
+			Severity: Info, Code: "metadata-kept",
+			Summary: fmt.Sprintf("%s this tool does not generate would be kept as published", plural(len(kept), "document", "documents")),
+			Detail: "each is carried into the new repomd.xml unchanged. This tool never updates them, so keep " +
+				"regenerating them with the tooling that made them when the packages they describe change.",
+			Items: truncate(kept, maxItems),
 		})
 	}
 }
