@@ -60,6 +60,12 @@ type Config struct {
 	Version     string `json:"version,omitempty"`
 	Description string `json:"description,omitempty"`
 
+	// Validity records the --validity in effect, as a Go duration ("168h"):
+	// how long after its Date each published Release stays valid. Recording
+	// it keeps a later publish that omits --validity from silently writing a
+	// Release that never expires.
+	Validity string `json:"validity,omitempty"`
+
 	// SignRelease records whether the Release file was signed.
 	SignRelease bool `json:"sign_release"`
 	// GPGKeyID is the primary-key fingerprint of the key used for signing.
