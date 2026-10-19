@@ -291,9 +291,48 @@ func (r *Repo) AddRPM(localPath string) (*repodata.Package, error) {
 		}
 	}
 
+	if err := r.locationFree(pkg, pkg.Location); err != nil {
+		return nil, err
+	}
 	r.idx.Add(pkg)
 	r.pending[pkg.Location] = localPath
 	return pkg, nil
+}
+
+// locationFree reports an error if a different package already occupies loc.
+// Another build of p's own name, arch and version does not count: p replaces
+// it. Two packages at one location would leave the metadata describing two
+// files where the repository can hold only one, and every client installing
+// the other would fail its checksum.
+func (r *Repo) locationFree(p *repodata.Package, loc string) error {
+	other := r.idx.ByLocation(loc)
+	if other == nil || other.PkgID == p.PkgID || sameNEVRA(other, p) {
+		return nil
+	}
+	return locationClash(other, p, loc)
+}
+
+func sameNEVRA(a, b *repodata.Package) bool {
+	return a.Name == b.Name && a.Arch == b.Arch && a.EVR() == b.EVR()
+}
+
+func locationClash(a, b *repodata.Package, loc string) error {
+	return fmt.Errorf("%s and %s would both be published at %s; give them different file names, or a --location-prefix that keeps them apart",
+		a.NEVRA(), b.NEVRA(), loc)
+}
+
+// checkLocations refuses an index in which two packages share a location. It
+// runs before Commit transfers anything, which catches every way of getting
+// there, including a relocation that flattens two directories into one.
+func checkLocations(pkgs []*repodata.Package) error {
+	at := make(map[string]*repodata.Package, len(pkgs))
+	for _, p := range pkgs {
+		if other, ok := at[p.Location]; ok && other.PkgID != p.PkgID {
+			return locationClash(other, p, p.Location)
+		}
+		at[p.Location] = p
+	}
+	return nil
 }
 
 // PruneWarnings returns the dependency breakages accumulated by AddRPM's

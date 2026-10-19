@@ -300,6 +300,11 @@ func (r *Repo) CopyPackagesFrom(ctx context.Context, src backend.Backend, pkgs [
 
 	for _, p := range pkgs {
 		loc := r.copyLocation(p, opt)
+		// Checked before anything is written: the copy uploads each file as
+		// it goes, so a second package at loc would overwrite the first.
+		if err := r.locationFree(p, loc); err != nil {
+			return nil, err
+		}
 		obj := packageObject(p, p.Location)
 
 		// Signing rewrites the file, so a copy already at the destination is
