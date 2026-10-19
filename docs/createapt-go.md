@@ -576,6 +576,9 @@ source has no such constraint.
   the same place and indexes keep being published the same way.
 - `origin`, `label`, `codename` are the `Release` fields, preserved across
   publishes.
+- `validity` records `--validity`, so later publishes keep writing a
+  `Valid-Until` without repeating the flag. `--validity 0` turns it off and is
+  recorded too.
 - `copy_source` is written by `copy` and records where the repository was copied
   from, so a later `copy --continue` can tell that it is resuming the same copy
   rather than overwriting an unrelated repository.
