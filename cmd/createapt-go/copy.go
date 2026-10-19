@@ -210,10 +210,20 @@ func runCopy(cmd *cobra.Command, srcLoc, dstLoc string, cf *copyFlags) error {
 	}
 
 	// Set the destination's suite and component before the repo is opened, so
-	// the recorded-config layer and the index both see them.
-	gf.suite = dstSuite
+	// the recorded-config layer and the index both see them. They are set as
+	// flags, not just as values: applyConfigDefaults replaces any suite or
+	// component not given on the command line with the destination's recorded
+	// one, which would publish into a different suite from the one checked
+	// and reported above.
+	if err := cmd.Flags().Set("suite", dstSuite); err != nil {
+		closeBackend(dstBE)
+		return err
+	}
 	if cf.dstComponent != "" {
-		gf.component = cf.dstComponent
+		if err := cmd.Flags().Set("component", cf.dstComponent); err != nil {
+			closeBackend(dstBE)
+			return err
+		}
 	}
 
 	return copyRebuilding(cmd, copyRun{
