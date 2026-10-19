@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"sort"
+	"strings"
 
 	"github.com/danudey/createrepo-go/pkg/publish"
 
@@ -51,6 +52,10 @@ type metadataSet struct {
 	repomd    []byte
 	files     map[string][]byte // href -> compressed bytes
 	repomdSig []byte
+	// carried are the hrefs of documents kept from the previous repomd.xml
+	// unchanged (comps, updateinfo, modules, ...): published already, so
+	// neither written nor deleted.
+	carried map[string]bool
 }
 
 // Commit publishes the current index. It uploads only RPMs that are missing or
@@ -143,6 +148,9 @@ func (r *Repo) computeCleanups(ctx context.Context, plan *Plan, meta *metadataSe
 		for href := range meta.files {
 			keep[href] = true
 		}
+		for href := range meta.carried {
+			keep[href] = true
+		}
 		var err error
 		// Superseded metadata is deleted anyway, so it is not listed twice.
 		plan.StaleMetadata, err = publish.Unreferenced(ctx, lister, "repodata/", func(p string) bool { return keep[p] }, plan.ObsoleteMeta)
@@ -229,6 +237,19 @@ func (r *Repo) generateMetadata(pkgs []*repodata.Package) (*metadataSet, error) 
 			OpenSize:     int64(len(d.open)),
 		})
 	}
+	// Documents this tool does not generate are carried over as they are.
+	// Dropping them would delete a repository's comps groups, errata or
+	// module streams the first time a package was added.
+	ms.carried = map[string]bool{}
+	if r.old != nil && !r.replaced {
+		for _, d := range r.old.Data {
+			if DerivedFromPackages(d.Type) {
+				continue
+			}
+			repomd.Data = append(repomd.Data, d)
+			ms.carried[d.Location] = true
+		}
+	}
 	ms.repomd = repodata.WriteRepomd(repomd)
 
 	if r.opt.Signer != nil {
@@ -241,6 +262,20 @@ func (r *Repo) generateMetadata(pkgs []*repodata.Package) (*metadataSet, error) 
 	return ms, nil
 }
 
+// DerivedFromPackages reports whether a repomd.xml data type describes the
+// package list itself: primary, filelists and other, which Commit regenerates,
+// and their sqlite (_db) and zchunk (_zck) forms, which it does not write and
+// which would go stale. yum on EL7 prefers the sqlite databases, so keeping an
+// old one would show its clients an out-of-date package list.
+func DerivedFromPackages(typ string) bool {
+	base := strings.TrimSuffix(strings.TrimSuffix(typ, "_db"), "_zck")
+	switch base {
+	case "primary", "filelists", "other", "filelists-ext":
+		return true
+	}
+	return false
+}
+
 // obsoleteMetadata returns previously-published repodata files that the new
 // metadata replaces (so they can be deleted). The current repomd.xml is left in
 // place because it is overwritten, not replaced by a checksum-named file.
@@ -250,7 +285,7 @@ func (r *Repo) obsoleteMetadata(meta *metadataSet) []string {
 	}
 	var out []string
 	for _, d := range r.old.Data {
-		if _, stillUsed := meta.files[d.Location]; stillUsed {
+		if _, stillUsed := meta.files[d.Location]; stillUsed || meta.carried[d.Location] {
 			continue
 		}
 		if d.Location == repomdPath {
