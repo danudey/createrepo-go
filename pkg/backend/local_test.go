@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -138,6 +139,36 @@ func TestRemoteRel(t *testing.T) {
 	for rel, want := range map[string]string{"": "", "/a/b": "a/b", "a/../b": "a/../b", "..a/b": "..a/b"} {
 		if got, err := remoteRel(rel); err != nil || got != want {
 			t.Errorf("remoteRel(%q) = %q, %v, want %q", rel, got, err, want)
+		}
+	}
+}
+
+// Published files must be readable by the web server that serves the
+// repository, whoever ran the publish. os.CreateTemp makes 0600 files, and
+// both Put and Copy rename one into place.
+func TestLocalPublishesWorldReadableFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no Unix permission bits")
+	}
+	ctx := context.Background()
+	be, err := Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := be.Put(ctx, "repodata/repomd.xml", strings.NewReader("<repomd/>"), -1); err != nil {
+		t.Fatal(err)
+	}
+	if err := be.(Copier).Copy(ctx, "repodata/repomd.xml", "Packages/copy.xml"); err != nil {
+		t.Fatal(err)
+	}
+	root := be.String()
+	for _, rel := range []string{"repodata/repomd.xml", "Packages/copy.xml"} {
+		fi, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := fi.Mode().Perm(); mode&0o044 != 0o044 {
+			t.Errorf("%s is %v; a web server running as another user could not read it", rel, mode)
 		}
 	}
 }

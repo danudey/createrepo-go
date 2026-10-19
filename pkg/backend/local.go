@@ -92,6 +92,21 @@ func (l *local) Put(_ context.Context, relpath string, r io.Reader, _ int64) err
 		tmp.Close()
 		return err
 	}
+	// CreateTemp makes the file 0600, and the rename keeps that mode, so
+	// without this every published file is readable by its owner alone and a
+	// web server serving the repository answers 403. Files get the same
+	// world-readable treatment as the directories above.
+	// #nosec G302 -- published repository files must be world-readable.
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return err
+	}
+	// Flush before the rename, so a crash cannot leave a renamed but empty
+	// file (repomd.xml or Release) where the old one was.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
