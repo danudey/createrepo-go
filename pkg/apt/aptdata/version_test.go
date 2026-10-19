@@ -93,9 +93,33 @@ func TestParseVersionRejectsMalformed(t *testing.T) {
 		"abc",      // upstream must start with a digit
 		"1.0-a_b",  // underscore is not valid in a revision
 		"1.0 beta", // whitespace is not valid
+		// dpkg rejects all of these; they used to be accepted.
+		"-1:1.0",          // a negative epoch
+		"1a:2.0",          // an epoch is digits only
+		":1.0",            // an empty epoch
+		"1.0-",            // an empty revision
+		"99999999999:1.0", // an epoch too big for dpkg
 	} {
 		if _, err := ParseVersion(in); err == nil {
 			t.Errorf("ParseVersion(%q) succeeded; want an error", in)
 		}
+	}
+}
+
+// dpkg reads an epoch with strtol, which allows one leading "+".
+func TestParseVersionAcceptsAPlusSignedEpoch(t *testing.T) {
+	if v, err := ParseVersion("+3:1.0-1"); err != nil || v.Epoch != 3 {
+		t.Errorf("ParseVersion(%q) = (%+v, %v), want epoch 3", "+3:1.0-1", v, err)
+	}
+}
+
+// Colons after the epoch belong to the upstream version, which dpkg allows.
+func TestParseVersionKeepsLaterColonsInUpstream(t *testing.T) {
+	v, err := ParseVersion("2:1.0:beta-3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Epoch != 2 || v.Upstream != "1.0:beta" || v.Revision != "3" {
+		t.Errorf("ParseVersion(%q) = %+v", "2:1.0:beta-3", v)
 	}
 }
