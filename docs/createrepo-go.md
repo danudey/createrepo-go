@@ -533,6 +533,10 @@ package, so its metadata is re-derived from the signed file.
 - A source that cannot enumerate its contents (plain HTTP) contributes only the
   files its metadata references; anything else it stores is invisible and is
   reported as such.
+- An exact copy refuses to replace a destination file whose content is known
+  to differ from the source's (a package of another repository, or a damaged
+  one), and names it. `--overwrite` or `--force` replaces it. The top-level
+  index and its signatures change on every publish and are always replaced.
 - `--overwrite` deletes destination files the source does not have, so it asks
   for confirmation first unless `--yes` or `--dry-run` is given.
 
