@@ -22,6 +22,7 @@ import (
 	"github.com/danudey/createrepo-go/pkg/apt/debmeta"
 	"github.com/danudey/createrepo-go/pkg/backend"
 	"github.com/danudey/createrepo-go/pkg/progress"
+	"github.com/danudey/createrepo-go/pkg/publish"
 )
 
 // Signer signs a suite's Release file. apt accepts either an inline-signed
@@ -164,6 +165,9 @@ type Repo struct {
 	opt Options
 	idx *aptdata.Index
 	old *aptdata.Release // previously published Release, for metadata GC
+	// loaded is the suite's Release and InRelease as load read them, so
+	// Commit can tell whether another publish replaced them meanwhile.
+	loaded []publish.Unchanged
 
 	// pending tracks local files to upload, keyed by destination path.
 	pending map[string]string // dest -> local path
@@ -243,6 +247,13 @@ func (r *Repo) Close() error { return backend.Close(r.be) }
 // set).
 func (r *Repo) load(ctx context.Context) error {
 	suite := r.opt.suite()
+	for _, p := range []string{aptdata.ReleasePath(suite), aptdata.InReleasePath(suite)} {
+		data, err := r.getAll(ctx, p)
+		if err != nil && !errors.Is(err, backend.ErrNotExist) {
+			return err
+		}
+		r.loaded = append(r.loaded, publish.Unchanged{Path: p, Exists: err == nil, Data: data})
+	}
 
 	rel, err := r.loadRelease(ctx, suite)
 	if errors.Is(err, backend.ErrNotExist) {
