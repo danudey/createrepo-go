@@ -12,6 +12,8 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -27,6 +29,82 @@ type sftpBackend struct {
 	ssh    *ssh.Client
 	root   string // absolute remote path to the repo root
 	label  string
+	// transport is the connection under client, when it is not ssh (tests
+	// use a pipe). abort closes it first: sftp.Client.Close waits for a lock
+	// that a write stuck on an unresponsive server holds, and only closing
+	// the transport frees it.
+	transport io.Closer
+
+	abortOnce sync.Once
+}
+
+// sshDialTimeout bounds connecting to the server and completing the SSH
+// handshake, so an unreachable or silent host fails instead of hanging.
+var sshDialTimeout = 30 * time.Second
+
+// watch makes ctx able to interrupt an SFTP operation, which the sftp package
+// cannot do itself: when ctx is cancelled before stop is called, the connection
+// is closed, which fails whatever is waiting on it. The backend is unusable
+// afterwards, which is fine: a cancelled context means the run is ending.
+func (s *sftpBackend) watch(ctx context.Context) (stop func()) {
+	if ctx.Done() == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			s.abort()
+		case <-done:
+		}
+	}()
+	return func() { close(done) }
+}
+
+// abort closes the connection under any operation in progress.
+func (s *sftpBackend) abort() {
+	s.abortOnce.Do(func() {
+		switch {
+		case s.transport != nil:
+			_ = s.transport.Close()
+		case s.ssh != nil:
+			_ = s.ssh.Close()
+		}
+		_ = s.client.Close()
+	})
+}
+
+// ctxErr prefers the context's error to the one a closed connection produced,
+// so a cancelled operation says it was cancelled.
+func ctxErr(ctx context.Context, err error) error {
+	if err != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
+}
+
+// dialSSH connects and completes the SSH handshake within sshDialTimeout, or
+// sooner if ctx is cancelled.
+func dialSSH(ctx context.Context, addr string, cfg *ssh.ClientConfig) (*ssh.Client, error) {
+	d := net.Dialer{Timeout: sshDialTimeout}
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(sshDialTimeout)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
+		deadline = dl
+	}
+	_ = conn.SetDeadline(deadline)
+	c, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	// The deadline was for the handshake only; transfers may take as long
+	// as they take, and ctx bounds them through watch.
+	_ = conn.SetDeadline(time.Time{})
+	return ssh.NewClient(c, chans, reqs), nil
 }
 
 func newSFTP(ctx context.Context, location string) (*sftpBackend, error) {
@@ -48,13 +126,20 @@ func newSFTP(ctx context.Context, location string) (*sftpBackend, error) {
 	if err != nil {
 		return nil, err
 	}
+	auth, agentConn := sshAuthMethods(ctx, u)
+	// The agent is consulted only during the handshake, so its connection
+	// is closed as soon as the session is up, or has failed to come up.
+	if agentConn != nil {
+		defer agentConn.Close()
+	}
 	cfg := &ssh.ClientConfig{
 		User:            user,
-		Auth:            sshAuthMethods(ctx, u),
+		Auth:            auth,
 		HostKeyCallback: hkcb,
+		Timeout:         sshDialTimeout,
 	}
 	addr := net.JoinHostPort(host, port)
-	sshClient, err := ssh.Dial("tcp", addr, cfg)
+	sshClient, err := dialSSH(ctx, addr, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("sftp: dial %s: %w", addr, err)
 	}
@@ -72,21 +157,24 @@ func newSFTP(ctx context.Context, location string) (*sftpBackend, error) {
 }
 
 // sshAuthMethods builds auth methods: the agent (if available) plus a password
-// embedded in the URL (rare, but supported for automation).
-func sshAuthMethods(ctx context.Context, u *url.URL) []ssh.AuthMethod {
+// embedded in the URL (rare, but supported for automation). It returns the
+// agent connection, if it opened one, for the caller to close.
+func sshAuthMethods(ctx context.Context, u *url.URL) ([]ssh.AuthMethod, io.Closer) {
 	var methods []ssh.AuthMethod
+	var agentConn io.Closer
 	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
 		var d net.Dialer
 		// #nosec G704 -- a unix socket path from SSH_AUTH_SOCK, not a URL.
 		if conn, err := d.DialContext(ctx, "unix", sock); err == nil {
 			ag := agent.NewClient(conn)
 			methods = append(methods, ssh.PublicKeysCallback(ag.Signers))
+			agentConn = conn
 		}
 	}
 	if pw, ok := u.User.Password(); ok {
 		methods = append(methods, ssh.Password(pw))
 	}
-	return methods
+	return methods, agentConn
 }
 
 // InsecureIgnoreHostKey disables SSH host key verification for SFTP
@@ -140,19 +228,53 @@ func (s *sftpBackend) remote(relpath string) (string, error) {
 	return path.Join(s.root, rel), nil
 }
 
-func (s *sftpBackend) Get(_ context.Context, relpath string) (io.ReadCloser, error) {
+func (s *sftpBackend) Get(ctx context.Context, relpath string) (io.ReadCloser, error) {
 	p, err := s.remote(relpath)
 	if err != nil {
 		return nil, err
 	}
+	stop := s.watch(ctx)
 	f, err := s.client.Open(p)
 	if os.IsNotExist(err) {
+		stop()
 		return nil, ErrNotExist
 	}
-	return f, err
+	if err != nil {
+		stop()
+		return nil, ctxErr(ctx, err)
+	}
+	// The reader outlives this call, so ctx keeps watching until it is closed.
+	return &watchedReader{ReadCloser: f, ctx: ctx, stop: stop}, nil
 }
 
-func (s *sftpBackend) Stat(_ context.Context, relpath string) (*FileInfo, error) {
+// watchedReader stops a context watch when its reader is closed.
+type watchedReader struct {
+	io.ReadCloser
+	ctx  context.Context
+	stop func()
+	once sync.Once
+}
+
+func (w *watchedReader) Read(p []byte) (int, error) {
+	n, err := w.ReadCloser.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		err = ctxErr(w.ctx, err)
+	}
+	return n, err
+}
+
+func (w *watchedReader) Close() error {
+	w.once.Do(w.stop)
+	return w.ReadCloser.Close()
+}
+
+func (s *sftpBackend) Stat(ctx context.Context, relpath string) (*FileInfo, error) {
+	defer s.watch(ctx)()
+	fi, err := s.stat(relpath)
+	return fi, ctxErr(ctx, err)
+}
+
+func (s *sftpBackend) stat(relpath string) (*FileInfo, error) {
 	p, err := s.remote(relpath)
 	if err != nil {
 		return nil, err
@@ -167,7 +289,12 @@ func (s *sftpBackend) Stat(_ context.Context, relpath string) (*FileInfo, error)
 	return &FileInfo{Size: fi.Size()}, nil
 }
 
-func (s *sftpBackend) Put(_ context.Context, relpath string, r io.Reader, _ int64) error {
+func (s *sftpBackend) Put(ctx context.Context, relpath string, r io.Reader, _ int64) error {
+	defer s.watch(ctx)()
+	return ctxErr(ctx, s.put(relpath, r))
+}
+
+func (s *sftpBackend) put(relpath string, r io.Reader) error {
 	dst, err := s.remote(relpath)
 	if err != nil {
 		return err
@@ -202,7 +329,12 @@ func (s *sftpBackend) Put(_ context.Context, relpath string, r io.Reader, _ int6
 	return nil
 }
 
-func (s *sftpBackend) Delete(_ context.Context, relpath string) error {
+func (s *sftpBackend) Delete(ctx context.Context, relpath string) error {
+	defer s.watch(ctx)()
+	return ctxErr(ctx, s.delete(relpath))
+}
+
+func (s *sftpBackend) delete(relpath string) error {
 	p, err := s.remote(relpath)
 	if err != nil {
 		return err
@@ -219,7 +351,12 @@ func (s *sftpBackend) String() string { return s.label }
 // Copy duplicates src to dst on the remote host by running cp over an SSH
 // session, so the RPM contents never cross the network (mirroring how Hash
 // uses a remote sha256sum).
-func (s *sftpBackend) Copy(_ context.Context, src, dst string) error {
+func (s *sftpBackend) Copy(ctx context.Context, src, dst string) error {
+	defer s.watch(ctx)()
+	return ctxErr(ctx, s.copy(src, dst))
+}
+
+func (s *sftpBackend) copy(src, dst string) error {
 	from, err := s.remote(src)
 	if err != nil {
 		return err
@@ -253,8 +390,10 @@ func (s *sftpBackend) Copy(_ context.Context, src, dst string) error {
 
 func (s *sftpBackend) Close() error {
 	err := s.client.Close()
-	if e := s.ssh.Close(); err == nil {
-		err = e
+	if s.ssh != nil {
+		if e := s.ssh.Close(); err == nil {
+			err = e
+		}
 	}
 	return err
 }
@@ -262,7 +401,13 @@ func (s *sftpBackend) Close() error {
 // List implements Lister by walking the remote tree under prefix and returning
 // each regular file as a repo-relative, forward-slash path with its size. A
 // missing prefix directory yields an empty list.
-func (s *sftpBackend) List(_ context.Context, prefix string) ([]ObjectInfo, error) {
+func (s *sftpBackend) List(ctx context.Context, prefix string) ([]ObjectInfo, error) {
+	defer s.watch(ctx)()
+	out, err := s.list(prefix)
+	return out, ctxErr(ctx, err)
+}
+
+func (s *sftpBackend) list(prefix string) ([]ObjectInfo, error) {
 	root, err := s.remote(prefix)
 	if err != nil {
 		return nil, err
@@ -296,7 +441,13 @@ func (s *sftpBackend) HashesContent() bool { return true }
 
 // Hash implements RemoteHasher by running sha256sum on the remote host, so the
 // RPM contents never cross the network for validation.
-func (s *sftpBackend) Hash(_ context.Context, relpath, algo string) (string, bool, error) {
+func (s *sftpBackend) Hash(ctx context.Context, relpath, algo string) (string, bool, error) {
+	defer s.watch(ctx)()
+	sum, ok, err := s.hash(relpath, algo)
+	return sum, ok, ctxErr(ctx, err)
+}
+
+func (s *sftpBackend) hash(relpath, algo string) (string, bool, error) {
 	if algo != AlgoSHA256 {
 		return "", false, nil
 	}
