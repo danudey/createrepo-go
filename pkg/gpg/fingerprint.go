@@ -49,7 +49,8 @@ func fingerprintFromFile(path string) (string, error) {
 // keyring. gpg's colon-delimited output is parsed rather than its human
 // output, which is not stable across versions.
 func fingerprintFromKeyring(keyID string) (string, error) {
-	cmd := Command("--with-colons", "--fingerprint", keyID)
+	// "--" keeps a key id that starts with "-" from being read as an option.
+	cmd := Command("--with-colons", "--fingerprint", "--", keyID)
 	var out, errBuf bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
@@ -82,7 +83,7 @@ func ExportPublicKey(keyID string) ([]byte, error) {
 	if keyID == "" {
 		return nil, fmt.Errorf("no key id given")
 	}
-	cmd := Command("--armor", "--export", keyID)
+	cmd := Command("--armor", "--export", "--", keyID)
 	var out, errBuf bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf

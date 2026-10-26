@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
+	"github.com/danudey/createrepo-go/pkg/gpg"
 	"github.com/danudey/createrepo-go/pkg/rpm/repo"
 	"github.com/danudey/createrepo-go/pkg/rpm/repoconfig"
 	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
@@ -394,10 +395,4 @@ func checkResumable(cmd *cobra.Command, srcLoc string, dstBE backend.Backend, ds
 // normalizeKeyID reduces a fingerprint or key id to the lowercase long key id
 // (its last 16 hex digits), so a fingerprint recorded in a config file can be
 // compared with the issuer of an actual package signature.
-func normalizeKeyID(s string) string {
-	s = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(s), " ", ""))
-	if len(s) > 16 {
-		return s[len(s)-16:]
-	}
-	return s
-}
+func normalizeKeyID(s string) string { return gpg.LongKeyID(s) }

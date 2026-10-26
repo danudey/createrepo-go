@@ -95,7 +95,7 @@ exit 0
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	_, cleanup, err := NewPackageSignerKeyID("ABCDEF", awkwardPassphrase).SignFile(abs(t, referenceRPM))
+	_, cleanup, err := NewPackageSignerKeyID("ABCDEF01", awkwardPassphrase).SignFile(abs(t, referenceRPM))
 	if err != nil {
 		t.Fatal(err)
 	}
