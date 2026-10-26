@@ -89,6 +89,7 @@ func (r *Repo) Commit(ctx context.Context) (*Plan, error) {
 		Copies:  plan.Copies,
 		Uploads: plan.Uploads,
 		Swap:    []publish.File{{Path: repomdPath, Data: meta.repomd}},
+		Guard:   []publish.Unchanged{{Path: repomdPath, Exists: r.raw != nil, Data: r.raw}},
 		GC:      [][]string{plan.ObsoleteMeta, plan.DeletedRPMs, plan.UnreferencedRPMs, plan.StaleMetadata},
 	}
 	// The data files are checksum-named, so they never collide with what the
@@ -108,6 +109,8 @@ func (r *Repo) Commit(ctx context.Context) (*Plan, error) {
 	if err := publish.Execute(ctx, r.be, steps, r.opt.Tracker); err != nil {
 		return nil, err
 	}
+	// A later Commit on this Repo builds on what this one published.
+	r.raw = meta.repomd
 	return plan, nil
 }
 
