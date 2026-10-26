@@ -156,7 +156,12 @@ func runCopy(cmd *cobra.Command, srcLoc, dstLoc string, cf *copyFlags) error {
 	if err != nil {
 		return fmt.Errorf("source repomd.xml.asc: %w", err)
 	}
-	verifier, closeVerifier, err := verifySourceMetadata(cmd, src, srcSig, keyrings, cf.skipVerify)
+	// A trusted signature is required of each package only when asked for,
+	// or when the source records that it signs its packages. Many sources
+	// sign only repomd.xml, and their packages carry a vendor's signature or
+	// none; requiring one refused every such copy as soon as a key was at hand.
+	requirePackageSigs := gf.verifySigs || (srcCfg != nil && srcCfg.SignPackages)
+	verifier, closeVerifier, err := verifySourceMetadata(cmd, src, srcSig, keyrings, cf.skipVerify, requirePackageSigs)
 	if err != nil {
 		return err
 	}
@@ -318,7 +323,7 @@ func verificationKeyrings(cmd *cobra.Command, srcCfg *repoconfig.Config, skip bo
 // verifySourceMetadata checks the source's detached repomd.xml signature and
 // prepares the package-signature verifier used for each RPM the copy reads. It
 // returns a nil verifier when there is no key to check against.
-func verifySourceMetadata(cmd *cobra.Command, src *repo.Repo, srcSig []byte, keyrings []string, skip bool) (*sign.Verifier, func(), error) {
+func verifySourceMetadata(cmd *cobra.Command, src *repo.Repo, srcSig []byte, keyrings []string, skip, requirePackageSigs bool) (*sign.Verifier, func(), error) {
 	noop := func() {}
 	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 
@@ -364,6 +369,7 @@ func verifySourceMetadata(cmd *cobra.Command, src *repo.Repo, srcSig []byte, key
 	if v.Policy, err = targetPolicy(); err != nil {
 		return nil, noop, err
 	}
+	v.Optional = !requirePackageSigs
 	return v, v.Close, nil
 }
 
