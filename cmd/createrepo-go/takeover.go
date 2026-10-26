@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/danudey/createrepo-go/internal/cli"
@@ -13,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
+	"github.com/danudey/createrepo-go/pkg/gpg"
 	"github.com/danudey/createrepo-go/pkg/rpm/repoconfig"
 	"github.com/danudey/createrepo-go/pkg/rpm/takeover"
 )
@@ -87,6 +89,10 @@ Examples:
 			}
 			defer r.Close()
 
+			keyID, keyIDs, err := signingKey()
+			if err != nil {
+				return err
+			}
 			opts := takeover.Options{
 				Target:          gf.target,
 				Compression:     gf.compression,
@@ -99,7 +105,8 @@ Examples:
 				SignMetadata:    gf.signMetadata,
 				SignPackages:    gf.signPackages,
 				SignatureFormat: gf.signatureFormat,
-				GPGKeyID:        signingKeyID(),
+				GPGKeyID:        keyID,
+				GPGKeyIDs:       keyIDs,
 				SamplePackages:  tf.sample,
 				Name:            tf.repoName,
 				BaseURL:         tf.repoURL,
@@ -156,14 +163,36 @@ func readPackages(cmd *cobra.Command, be backend.Backend, requested bool) bool {
 	return backend.IsLocal(be)
 }
 
-// signingKeyID reports the key a republish would sign with, however it was
-// supplied. A key file is named as given; the analysis only needs something it
-// can compare and print.
-func signingKeyID() string {
-	if gf.gpgKeyID != "" {
-		return gf.gpgKeyID
+// signingKey reports the key a republish would sign with, however it was
+// supplied. A keyring key is passed on as given and looked up by the analysis.
+// A key file is read here: its path is not a key id, and its key is not in the
+// keyring, so the analysis gets the fingerprint and every key id that can sign
+// for it. Passing the path, as before, made every signature look like another
+// key's and recorded the path as gpg_key_id.
+func signingKey() (id string, ids []string, err error) {
+	if gf.gpgKeyID != "" || gf.gpgKey == "" {
+		return gf.gpgKeyID, nil, nil
 	}
-	return gf.gpgKey
+	data, err := os.ReadFile(gf.gpgKey)
+	if err != nil {
+		return "", nil, err
+	}
+	keys, err := gpg.ReadKeyRing(data)
+	if err != nil {
+		return "", nil, fmt.Errorf("read key %s: %w", gf.gpgKey, err)
+	}
+	if len(keys) == 0 || keys[0].PrimaryKey == nil {
+		return "", nil, fmt.Errorf("read key %s: no key found", gf.gpgKey)
+	}
+	e := keys[0]
+	ids = append(ids, e.PrimaryKey.KeyIdString())
+	for _, sk := range e.Subkeys {
+		ids = append(ids, sk.PublicKey.KeyIdString())
+	}
+	for i := range ids {
+		ids[i] = strings.ToLower(ids[i])
+	}
+	return gpg.FingerprintOf(e), ids, nil
 }
 
 // adoptRepository records the analysed settings in the repository's config

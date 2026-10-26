@@ -56,6 +56,11 @@ type Options struct {
 	// GPGKeyID is the key that would sign, as supplied (a fingerprint, key id
 	// or uid).
 	GPGKeyID string
+	// GPGKeyIDs are the long key ids (primary and subkeys) that could issue a
+	// signature for that key, when the caller already knows them, as it does
+	// for a key file. Empty means they are looked up from GPGKeyID in the
+	// local keyring.
+	GPGKeyIDs []string
 
 	// SamplePackages is how many packages to download and inspect to find out
 	// who signed them. Zero skips the inspection.
@@ -496,6 +501,14 @@ func (a *analysis) files() {
 	}
 }
 
+// signerIDs returns the long key ids that may sign for the configured key.
+func (a *analysis) signerIDs() []string {
+	if len(a.opt.GPGKeyIDs) > 0 {
+		return a.opt.GPGKeyIDs
+	}
+	return sign.KeyAndSubkeyIDs(strings.ToLower(a.opt.GPGKeyID))
+}
+
 // signatures establishes who signed the repository — the detached repomd.xml
 // signature and, when sampling is enabled, the packages themselves — and what
 // the configured signing settings would do to that.
@@ -549,7 +562,7 @@ func (a *analysis) metadataSignature(ctx context.Context) error {
 		})
 		return nil
 	}
-	if key := strings.ToLower(a.opt.GPGKeyID); key != "" && len(pub.MetadataSigners) > 0 && !sign.SameSigner(pub.MetadataSigners, sign.KeyAndSubkeyIDs(key)) {
+	if a.opt.GPGKeyID != "" && len(pub.MetadataSigners) > 0 && !sign.SameSigner(pub.MetadataSigners, a.signerIDs()) {
 		a.rep.add(Finding{
 			Severity: Blocking, Code: "metadata-signer-changed",
 			Summary: "repomd.xml is signed by " + signer + ", but the republish would sign it with " + a.opt.GPGKeyID,
@@ -637,7 +650,7 @@ func (a *analysis) packageSignatureFindings(unsigned, noV4 int) {
 	if len(signers) == 0 || !a.opt.SignPackages || a.opt.GPGKeyID == "" {
 		return
 	}
-	if !sign.SameSigner(signers, sign.KeyAndSubkeyIDs(strings.ToLower(a.opt.GPGKeyID))) {
+	if !sign.SameSigner(signers, a.signerIDs()) {
 		a.rep.add(Finding{
 			Severity: Advisory, Code: "package-signer-changed",
 			Summary: fmt.Sprintf("the published packages are signed by %s, but --sign-packages would sign new ones with %s",
