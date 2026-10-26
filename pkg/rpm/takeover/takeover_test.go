@@ -213,7 +213,7 @@ func render(rep *Report) string {
 	return b.String()
 }
 
-func TestAnalyzeReportsMetadataItWouldDrop(t *testing.T) {
+func TestAnalyzeReportsWhatHappensToOtherMetadata(t *testing.T) {
 	dir := foreign{
 		prefix: "Packages",
 		extras: []extraDoc{
@@ -226,42 +226,36 @@ func TestAnalyzeReportsMetadataItWouldDrop(t *testing.T) {
 
 	rep := analyze(t, dir, Options{LocationPrefix: "Packages"})
 
+	// Only the sqlite database, which describes the package list and would go
+	// stale, is dropped; it is advisory, because nothing on RHEL 8+ reads it.
 	dropped := finding(rep, "metadata-dropped")
-	if len(dropped) != 4 {
-		t.Fatalf("expected four kinds of dropped metadata, got %d:\n%s", len(dropped), render(rep))
+	if len(dropped) != 1 || dropped[0].Severity != Advisory {
+		t.Fatalf("expected the sqlite metadata alone to be dropped, as advisory:\n%s", render(rep))
 	}
-	var blocking, advisory int
-	for _, f := range dropped {
-		switch f.Severity {
-		case Blocking:
-			blocking++
-		case Advisory:
-			advisory++
-		case Info:
-		}
+	if kept := finding(rep, "metadata-kept"); len(kept) != 1 || len(kept[0].Items) != 3 {
+		t.Errorf("expected comps, updateinfo and modules to be reported as kept:\n%s", render(rep))
 	}
-	// comps, updateinfo and modulemd break a client that uses them; sqlite does
-	// not, because nothing on RHEL 8+ reads it.
-	if blocking != 3 || advisory != 1 {
-		t.Errorf("dropped metadata ranked %d blocking / %d advisory, want 3 / 1:\n%s", blocking, advisory, render(rep))
-	}
-	if rep.OK() {
-		t.Error("a repository that would lose its comps and updateinfo metadata reported as safe")
+	if !rep.OK() {
+		t.Errorf("keeping comps, updateinfo and modules should not block a takeover:\n%s", render(rep))
 	}
 
-	// The files are named, and named as being deleted, so the operator can see
-	// exactly what goes.
-	var deleted []string
-	deleted = append(deleted, rep.Changes.DeletedFiles...)
-	for _, want := range []string{"repodata/comps.xml", "repodata/updateinfo.xml", "repodata/modules.yaml", "repodata/primary.sqlite"} {
-		if !slices.Contains(deleted, want) {
-			t.Errorf("%s is dropped but not listed among the files that would be deleted: %v", want, deleted)
+	// The dropped file is named as deleted; the kept ones are not.
+	deleted := rep.Changes.DeletedFiles
+	if !slices.Contains(deleted, "repodata/primary.sqlite") {
+		t.Errorf("repodata/primary.sqlite is dropped but not listed as deleted: %v", deleted)
+	}
+	for _, kept := range []string{"repodata/comps.xml", "repodata/updateinfo.xml", "repodata/modules.yaml"} {
+		if slices.Contains(deleted, kept) {
+			t.Errorf("%s is kept but listed as deleted: %v", kept, deleted)
 		}
 	}
 	for _, m := range rep.Published.Metadata {
-		want := "deleted"
-		if m.Type == "primary" || m.Type == "filelists" || m.Type == "other" {
+		want := "kept"
+		switch m.Type {
+		case "primary", "filelists", "other":
 			want = "regenerated"
+		case "primary_db":
+			want = "deleted"
 		}
 		if m.Fate != want {
 			t.Errorf("metadata %s fate = %q, want %q", m.Type, m.Fate, want)

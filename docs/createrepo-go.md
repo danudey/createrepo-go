@@ -347,11 +347,12 @@ migration (`--json` emits the whole report for a CI step to act on).
 ### What it catches
 
 - **Metadata this tool does not generate.** It writes primary, filelists and
-  other, and a publish deletes the files the superseded `repomd.xml` referenced —
-  so comps (`dnf group install`), updateinfo (`dnf update --security`), modulemd
-  and anything else the repository publishes would be **lost**. Each is reported
-  with what depends on it; sqlite databases are only advisory, because nothing on
-  RHEL 8+ reads them.
+  other. A publish carries every other document the repository publishes into
+  the new `repomd.xml` unchanged: comps (`dnf group install`), updateinfo
+  (`dnf update --security`), modulemd and so on. These are reported as kept, but
+  this tool never updates them. The sqlite and zchunk forms of primary,
+  filelists and other describe the old package list, so a publish drops them.
+  That is advisory, because nothing on RHEL 8+ reads the sqlite databases.
 - **A metadata signature that would stop verifying.** A republish rewrites
   `repomd.xml` and leaves `repomd.xml.asc` beside it, so a signed repository that
   is not re-signed breaks every client with `repo_gpgcheck=1`. Signing with a
