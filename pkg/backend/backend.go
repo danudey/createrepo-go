@@ -223,6 +223,20 @@ func Open(ctx context.Context, location string) (Backend, error) {
 	}
 }
 
+// Redact returns location with any password in it replaced by "xxxxx", for
+// showing in messages and for recording in files that get published. A
+// location with no password is returned unchanged.
+func Redact(location string) string {
+	u, err := url.Parse(location)
+	if err != nil || u.User == nil {
+		return location
+	}
+	if _, ok := u.User.Password(); !ok {
+		return location
+	}
+	return u.Redacted()
+}
+
 // splitScheme separates a "scheme://" prefix. For file paths with no scheme it
 // returns ("", path). For file:// it returns ("file", path-with-leading-slash).
 func splitScheme(location string) (scheme, rest string) {

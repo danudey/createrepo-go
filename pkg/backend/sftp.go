@@ -67,7 +67,7 @@ func newSFTP(ctx context.Context, location string) (*sftpBackend, error) {
 		client: sc,
 		ssh:    sshClient,
 		root:   u.Path,
-		label:  location,
+		label:  Redact(location),
 	}, nil
 }
 
