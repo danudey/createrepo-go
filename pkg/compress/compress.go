@@ -82,8 +82,23 @@ func detect(head []byte) format {
 // Decompress decodes data, a whole compressed document; uncompressed data is
 // returned unchanged. name is its path in the repository, for error messages.
 func Decompress(name string, data []byte) ([]byte, error) {
+	return DecompressLimit(name, data, -1)
+}
+
+// ErrTooLarge is returned by DecompressLimit for a document that decodes to
+// more than the limit.
+var ErrTooLarge = errors.New("decompressed size exceeds the limit")
+
+// DecompressLimit is Decompress for a document from a source that is not
+// trusted: decoding stops with ErrTooLarge once the output passes limit bytes,
+// so a small file that expands to many gigabytes cannot exhaust memory. A
+// negative limit means no limit.
+func DecompressLimit(name string, data []byte, limit int64) ([]byte, error) {
 	f := detect(data)
 	if f == plain {
+		if limit >= 0 && int64(len(data)) > limit {
+			return nil, fmt.Errorf("%s: %w (%d bytes)", name, ErrTooLarge, limit)
+		}
 		return data, nil
 	}
 	r, err := open(f, bytes.NewReader(data))
@@ -91,9 +106,17 @@ func Decompress(name string, data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("%s %s: %w", f, name, err)
 	}
 	defer r.Close()
-	out, err := io.ReadAll(r)
+	var src io.Reader = r
+	if limit >= 0 {
+		// One byte past the limit is enough to tell "exactly at" from "over".
+		src = io.LimitReader(r, limit+1)
+	}
+	out, err := io.ReadAll(src)
 	if err != nil {
 		return nil, fmt.Errorf("%s %s: %w", f, name, err)
+	}
+	if limit >= 0 && int64(len(out)) > limit {
+		return nil, fmt.Errorf("%s %s: %w (%d bytes)", f, name, ErrTooLarge, limit)
 	}
 	return out, nil
 }
