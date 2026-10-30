@@ -247,3 +247,26 @@ func TestIsDebAndIsDSC(t *testing.T) {
 		t.Error("IsDSC misclassified a path")
 	}
 }
+
+// Every part of a pool path comes from the package's own control file, so a
+// hostile Package, Source or Architecture must not lead out of the pool.
+func TestPoolLocationRefusesNamesThatLeaveThePool(t *testing.T) {
+	for field, value := range map[string]string{
+		aptdata.FieldPackage:      "../../../escape",
+		aptdata.FieldSource:       "../../../escape",
+		aptdata.FieldArchitecture: "../amd64",
+		aptdata.FieldVersion:      "1.0/../../x",
+	} {
+		para := aptdata.NewParagraph()
+		para.Set(aptdata.FieldPackage, "hello")
+		para.Set(aptdata.FieldVersion, "1.0-1")
+		para.Set(aptdata.FieldArchitecture, "amd64")
+		para.Set(field, value)
+		pkg := aptdata.NewPackage(para)
+		for _, pool := range []bool{true, false} {
+			if loc, err := poolLocation(pkg, "x.deb", Options{PoolLayout: pool}); err == nil {
+				t.Errorf("%s: %q (pool layout %v) placed the package at %q", field, value, pool, loc)
+			}
+		}
+	}
+}

@@ -376,8 +376,8 @@ func TestRelocateMovesServerSideWithoutReUploading(t *testing.T) {
 	// content is unchanged, so the local backend renames it rather than
 	// anything being uploaded.
 	flat := reopen(t, dir, Options{FlatPool: true})
-	if moved := flat.RelocateAll(); moved != 1 {
-		t.Fatalf("RelocateAll moved %d entries; want 1", moved)
+	if moved, err := flat.RelocateAll(); err != nil || moved != 1 {
+		t.Fatalf("RelocateAll moved %d entries (%v); want 1", moved, err)
 	}
 	plan, err := flat.Commit(ctx)
 	if err != nil {
