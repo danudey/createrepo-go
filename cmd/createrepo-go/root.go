@@ -142,7 +142,7 @@ never downloaded.`,
 	pf.BoolVar(&gf.verifySigs, "verify-sigs", false, "verify each RPM's signature against --keyring before adding")
 	pf.StringVar(&gf.gpgKey, "gpg-key", "", "path to a GPG private key file (for signing)")
 	pf.StringVar(&gf.gpgKeyID, "gpg-key-id", "", "GPG key id/uid from the local keyring (for signing)")
-	pf.StringVar(&gf.gpgPass, "gpg-passphrase", os.Getenv("CREATEREPO_GPG_PASSPHRASE"), "passphrase for the signing key (or set CREATEREPO_GPG_PASSPHRASE)")
+	pf.StringVar(&gf.gpgPass, "gpg-passphrase", "", "passphrase for the signing key (or set CREATEREPO_GPG_PASSPHRASE)")
 	pf.BoolVar(&gf.gpgNoPrompt, "gpg-no-prompt", cli.EnvBool("CREATEREPO_GPG_NO_PROMPT"), "never let gpg ask for a key passphrase while signing; fail instead of prompting (or set CREATEREPO_GPG_NO_PROMPT=1). Use this in CI, where a prompt hangs the job")
 	pf.StringArrayVar(&gf.keyrings, "keyring", nil, "public keyring file of trusted keys, for --verify-sigs, copy and verify (repeatable)")
 
@@ -162,6 +162,11 @@ func preRunE(cmd *cobra.Command, args []string) error {
 	cli.ApplyAWSEnv(gf.awsProfile, gf.awsRegion)
 	backend.InsecureIgnoreHostKey = gf.insecureIgnoreHostKey
 	gpg.NoPassphrasePrompt = gf.gpgNoPrompt
+	// The environment variable is read here rather than used as the flag's
+	// default, which --help would print.
+	if gf.gpgPass == "" {
+		gf.gpgPass = os.Getenv("CREATEREPO_GPG_PASSPHRASE")
+	}
 	// rebuild --resign-packages is an explicit instruction to sign the packages,
 	// so it satisfies "what to sign" for a supplied key. It is deliberately not
 	// derived from the recorded config (which would silently re-sign the whole
