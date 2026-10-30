@@ -3,6 +3,7 @@ package aptdata
 import (
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -155,6 +156,60 @@ func (c Compression) Compress(data []byte) ([]byte, error) {
 // returned unchanged. See package compress.
 func Decompress(name string, data []byte) ([]byte, error) {
 	return compress.Decompress(name, data)
+}
+
+// MaxIndexSize bounds any one index or Release this tool reads, compressed or
+// decoded, when nothing smaller is known. Debian's largest Packages index is
+// well under 100 MiB; the bound exists so a hostile repository cannot make a
+// small file expand until memory runs out.
+const MaxIndexSize = 1 << 30
+
+// ErrTooLarge is returned for a document larger than the limit it was read
+// with.
+var ErrTooLarge = errors.New("larger than the limit")
+
+// DecompressLimit is Decompress with a bound: decoding stops with ErrTooLarge
+// once the output passes limit bytes.
+func DecompressLimit(name string, data []byte, limit int64) ([]byte, error) {
+	rc, err := compress.DecompressStream(name, bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return ReadLimit(name, rc, limit)
+}
+
+// ReadLimit reads r to the end, failing with ErrTooLarge if it holds more
+// than limit bytes.
+func ReadLimit(name string, r io.Reader, limit int64) ([]byte, error) {
+	// One byte past the limit tells "exactly at" from "over".
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s: %w (%d bytes)", name, ErrTooLarge, limit)
+	}
+	return data, nil
+}
+
+// DecodedLimit is the most an index at path may decode to: the size the
+// Release records for its uncompressed form, which a Release lists alongside
+// the compressed ones, or MaxIndexSize when it records none.
+func (r *Release) DecodedLimit(path string) int64 {
+	plain := path
+	for _, ext := range []string{extGZIP, extXZ, extZSTD, extBZ2, ".zstd", ".lzma"} {
+		if strings.HasSuffix(plain, ext) {
+			plain = strings.TrimSuffix(plain, ext)
+			break
+		}
+	}
+	for _, f := range r.Files {
+		if f.Path == plain && f.Size > 0 && f.Size < MaxIndexSize {
+			return f.Size
+		}
+	}
+	return MaxIndexSize
 }
 
 // DecompressStream wraps r with the decoder its content calls for. The caller
