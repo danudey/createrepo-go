@@ -2,6 +2,9 @@ package repocheck
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -260,4 +263,31 @@ func openBackendFor(dir string) (backend.Backend, error) {
 
 func writeConfigSuite(ctx context.Context, be backend.Backend, suite string) error {
 	return repoconfig.Save(ctx, be, &repoconfig.Config{Suite: suite})
+}
+
+// A sources file fetched over HTTP was written by whoever serves it, so the
+// repositories it names must be http(s): a file:// entry would have check read
+// the operator's local files. The same entry in a local sources file is the
+// operator's own choice and is checked.
+func TestRemoteSourcesFileCannotNameLocalPaths(t *testing.T) {
+	dir := publish(t, "stable", "hello_2.10-3_all.deb")
+	list := "deb file://" + dir + " stable main\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, list)
+	}))
+	defer srv.Close()
+
+	results := run(t, Options{Input: srv.URL + "/evil.list"})
+	ok, fail := counts(results)
+	if ok != 0 || fail != 1 || !strings.Contains(results[0].Detail, "may only name http(s)") {
+		t.Errorf("a fetched sources file naming file:// was checked (ok %d, fail %d): %+v", ok, fail, results)
+	}
+
+	local := filepath.Join(t.TempDir(), "local.list")
+	if err := os.WriteFile(local, []byte(list), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if ok, fail := counts(run(t, Options{Input: local})); ok == 0 || fail != 0 {
+		t.Errorf("a local sources file naming file:// was not checked (ok %d, fail %d)", ok, fail)
+	}
 }

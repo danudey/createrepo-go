@@ -127,6 +127,10 @@ func Run(ctx context.Context, opts Options) (results []Result, warnings []string
 				Basearch:   t.basearch,
 			})
 		}
+		if err := checkcore.CheckTargetScheme(opts.Input, t.baseURL); err != nil {
+			ck.add(Result{Target: t.label, Kind: "repository", Loc: t.baseURL, Status: StatusFail, Detail: err.Error()})
+			continue
+		}
 		be, err := backend.Open(ctx, t.baseURL)
 		if err != nil {
 			ck.add(Result{

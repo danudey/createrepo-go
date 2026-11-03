@@ -145,6 +145,8 @@ func TestPathOf(t *testing.T) {
 		"/local/path/c.repo": "/local/path/c.repo",
 		"relative/d.repo":    "relative/d.repo",
 		"s3://bucket/e.repo": "/e.repo",
+		`C:\repos\f.repo`:    `C:\repos\f.repo`,
+		"C:/repos/g.repo":    "C:/repos/g.repo",
 	}
 	for in, want := range cases {
 		if got := pathOf(in); got != want {

@@ -116,6 +116,10 @@ func Run(ctx context.Context, opts Options) (results []Result, warnings []string
 		// file can name different components per entry.
 		ck.cfg.Components = t.Components
 
+		if err := checkcore.CheckTargetScheme(opts.Input, t.BaseURL); err != nil {
+			ck.add(Result{Target: t.Label, Kind: "repository", Loc: t.BaseURL, Status: StatusFail, Detail: err.Error()})
+			continue
+		}
 		be, err := backend.Open(ctx, t.BaseURL)
 		if err != nil {
 			ck.add(Result{

@@ -241,8 +241,13 @@ func localPath(s string) string {
 }
 
 // pathOf returns the path component of a URL, or the string itself if it is not
-// a URL (so a local ".repo" path is still recognised).
+// a URL (so a local ".repo" path is still recognised). Only "scheme://" counts
+// as a URL, as in the backend package: url.Parse reads the drive letter of a
+// Windows path such as C:\repos\a.repo as a scheme.
 func pathOf(rawURL string) string {
+	if !strings.Contains(rawURL, "://") {
+		return rawURL
+	}
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme == "" {
 		return rawURL
