@@ -11,6 +11,7 @@ import (
 
 	"github.com/danudey/createrepo-go/pkg/xfer"
 
+	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
 	"github.com/danudey/createrepo-go/pkg/apt/debmeta"
 	"github.com/danudey/createrepo-go/pkg/backend"
 	"github.com/danudey/createrepo-go/pkg/progress"
@@ -70,7 +71,7 @@ func readAll(ctx context.Context, be backend.Backend, relpath string) ([]byte, e
 		return nil, err
 	}
 	defer rc.Close()
-	return io.ReadAll(rc)
+	return aptdata.ReadLimit(relpath, rc, aptdata.MaxIndexSize)
 }
 
 // fetchToTempFile streams an object into a temporary file, returning its path,

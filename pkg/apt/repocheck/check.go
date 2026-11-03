@@ -214,7 +214,7 @@ func (ck *checker) checkIndexes(ctx context.Context, be backend.Backend, label, 
 			continue
 		}
 
-		body, err := aptdata.Decompress(f.Path, raw)
+		body, err := aptdata.DecompressLimit(f.Path, raw, rel.DecodedLimit(f.Path))
 		if err != nil {
 			ck.add(Result{
 				Target: label, Kind: kindIndex, Loc: full, Status: StatusFail,
