@@ -79,7 +79,7 @@ supports it.`,
 				defer cleanupAll()
 				signed := make([]string, len(rpms))
 				for i, p := range rpms {
-					out, cleanup, err := signer.SignFile(p)
+					out, cleanup, err := signer.SignFileContext(cli.Ctx(cmd), p)
 					if err != nil {
 						return err
 					}

@@ -5,10 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+
+	"github.com/danudey/createrepo-go/internal/cli"
 )
 
 func main() {
-	if err := rootCmd().Execute(); err != nil {
+	ctx, stop := cli.SignalContext()
+	err := rootCmd().ExecuteContext(ctx)
+	stop()
+	if err != nil {
 		// A reported check failure, or a takeover the analysis found unsafe,
 		// has already printed its details; exit non-zero without an extra
 		// "error:" line.
