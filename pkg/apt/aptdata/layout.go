@@ -137,6 +137,21 @@ func ValidComponent(component string) error {
 // ValidArch rejects architecture names that are not plain identifiers.
 func ValidArch(arch string) error { return validPathComponent("architecture", arch, false) }
 
+// ValidPackageName rejects a binary or source package name that cannot be used
+// as one segment of a pool path. Package names come from the package itself or
+// from another repository's indexes, so a name like "../../x" must be refused
+// before it is joined into a destination path.
+func ValidPackageName(name string) error { return validPathComponent("package name", name, false) }
+
+// ValidFileName rejects a file name, as listed in a .dsc or a Sources stanza,
+// that is not a single path segment.
+func ValidFileName(name string) error {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+		return fmt.Errorf("file name %q is not a single path segment", name)
+	}
+	return nil
+}
+
 // validPathComponent checks a name used as one or more path segments.
 func validPathComponent(kind, name string, allowSlash bool) error {
 	if name == "" {

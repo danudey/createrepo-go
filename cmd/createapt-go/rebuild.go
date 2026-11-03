@@ -79,7 +79,10 @@ The cleanup flags require a backend that can list its contents (not plain HTTP).
 				pruneRep = r.PruneOlderVersions()
 				printPruneWarnings(cmd, pruneRep.Kept, pruneRep.Broken)
 			}
-			relocated := r.RelocateAll()
+			relocated, err := r.RelocateAll()
+			if err != nil {
+				return err
+			}
 
 			// Preview the plan (no side effects), including directory cleanups.
 			preview, err := r.Plan(cli.Ctx(cmd))

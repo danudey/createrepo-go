@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -250,5 +251,76 @@ func TestSameRepository(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "pinned") {
 		t.Errorf("the error does not name the offending package: %v", err)
+	}
+}
+
+// keyStore is a destination that, like S3 or GCS, stores whatever key it is
+// given. It records every key written.
+type keyStore struct {
+	backend.Backend
+	puts []string
+}
+
+// Stat reports any key it has not stored as absent, as an object store does,
+// rather than refusing it as the local backend would.
+func (k *keyStore) Stat(ctx context.Context, p string) (*backend.FileInfo, error) {
+	if backend.CheckPath(p) != nil {
+		return nil, backend.ErrNotExist
+	}
+	return k.Backend.Stat(ctx, p)
+}
+
+func (k *keyStore) Put(ctx context.Context, p string, r io.Reader, n int64) error {
+	k.puts = append(k.puts, p)
+	_, err := io.Copy(io.Discard, r)
+	return err
+}
+
+// A relocating copy builds the destination from the source package's name,
+// which comes from the source's indexes. A name that would leave the pool must
+// stop the copy before anything is written: an object store would otherwise
+// store the "../" key as given.
+func TestCopyEntriesRefusesANameThatLeavesThePool(t *testing.T) {
+	ctx := context.Background()
+	srcDir := publishSource(t, "hello_2.10-3_all.deb")
+	src := reopen(t, srcDir, Options{})
+	entries := src.Index().Entries()
+	for _, e := range entries {
+		e.(*aptdata.Package).Set(aptdata.FieldSource, "../../../../escape")
+	}
+
+	local, err := backend.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &keyStore{Backend: local}
+	dst, err := OpenWith(ctx, store, Options{Suite: "bookworm", Create: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dst.Close()
+
+	if _, err := dst.CopyEntriesFrom(ctx, src.Backend(), entries, EntryCopyOptions{Component: "contrib"}); err == nil {
+		t.Error("a copy relocating by a source name of ../../../../escape succeeded")
+	}
+	for _, p := range store.puts {
+		if strings.Contains(p, "..") {
+			t.Errorf("the copy wrote %q", p)
+		}
+	}
+}
+
+// RelocateAll derives every pool directory from a name in the index, which a
+// copy may have brought in from elsewhere.
+func TestRelocateAllRefusesANameThatLeavesThePool(t *testing.T) {
+	r, _ := newRepo(t, Options{})
+	if _, err := r.AddDeb(ref(t, "hello_2.10-3_all.deb")); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range r.Index().Packages() {
+		p.Set(aptdata.FieldSource, "../../escape")
+	}
+	if _, err := r.RelocateAll(); err == nil {
+		t.Error("RelocateAll accepted a source name of ../../escape")
 	}
 }

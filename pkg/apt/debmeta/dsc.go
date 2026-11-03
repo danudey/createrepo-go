@@ -47,6 +47,10 @@ func SourceFromFile(localPath string, opts Options) (*SourceFiles, error) {
 	if name == "" {
 		return nil, fmt.Errorf("%s: .dsc has no Source field", localPath)
 	}
+	// The name becomes the pool directory, so it must be one path segment.
+	if err := aptdata.ValidPackageName(name); err != nil {
+		return nil, fmt.Errorf("%s: %w", localPath, err)
+	}
 	version := para.Get(aptdata.FieldVersion)
 	if version == "" {
 		return nil, fmt.Errorf("%s: .dsc has no Version field", localPath)
