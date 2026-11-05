@@ -5,8 +5,9 @@ import (
 	"strings"
 )
 
-// The metadata documents this tool generates. Everything else repomd.xml
-// references is a document it cannot write, so a republish drops it.
+// The metadata documents this tool generates. A republish carries every other
+// document into the new repomd.xml, except the forms of these three it does not
+// write (see repo.DerivedFromPackages), which it drops.
 var generated = map[string]bool{"primary": true, "filelists": true, "other": true}
 
 // sqliteMetadata names the sqlite databases as a group: three repomd types

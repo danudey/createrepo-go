@@ -59,9 +59,10 @@ type MetadataEntry struct {
 	Compression  string `json:"compression"`
 	ChecksumType string `json:"checksum_type"`
 	Size         int64  `json:"size"`
-	// Fate is "regenerated" for the documents this tool writes itself, and
-	// "deleted" for the ones it does not generate (a republish removes the
-	// files the superseded repomd.xml referenced).
+	// Fate is "regenerated" for the documents this tool writes itself,
+	// "deleted" for the sqlite and zchunk forms of those, which it does not
+	// write and which would go stale, and "kept" for everything else, which a
+	// republish carries over unchanged.
 	Fate string `json:"fate"`
 }
 
