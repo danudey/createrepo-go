@@ -3,10 +3,12 @@ package repo
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
 )
 
 // republishInPlace changes a file's content while leaving it a valid RPM, standing
@@ -94,15 +96,13 @@ func TestRefreshDropsDuplicateRecordsForOneFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Publish a second, wrong record for a file that already has one.
+	// Publish a second, wrong record for a file that already has one. Commit
+	// refuses to write such metadata, so it is written directly.
 	r := reopen(t, be)
 	real := r.Index().Packages()[0]
 	ghost := *real
 	ghost.PkgID = strings.Repeat("a", 64) // a checksum no file has
-	r.Index().Add(&ghost)
-	if _, err := r.Commit(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	writeRawMetadata(t, dir, append(r.Index().Packages(), &ghost))
 	r.Close()
 
 	dup := reopen(t, be)
@@ -278,5 +278,34 @@ func TestRefreshKeepsLocationAndBaseURL(t *testing.T) {
 		if p.XMLBase != base {
 			t.Errorf("%s lost its xml:base (%q)", p.Name, p.XMLBase)
 		}
+	}
+}
+
+// writeRawMetadata publishes uncompressed primary, filelists and other for
+// pkgs, as given, under a matching repomd.xml. It is for fixtures Commit would
+// refuse to produce.
+func writeRawMetadata(t *testing.T, dir string, pkgs []*repodata.Package) {
+	t.Helper()
+	md := &repodata.Repomd{Revision: "1"}
+	for _, d := range []struct {
+		typ  string
+		body []byte
+	}{
+		{"primary", repodata.WritePrimary(pkgs)},
+		{"filelists", repodata.WriteFilelists(pkgs)},
+		{"other", repodata.WriteOther(pkgs)},
+	} {
+		href := "repodata/raw-" + d.typ + ".xml"
+		if err := os.WriteFile(filepath.Join(dir, href), d.body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256Hex(d.body)
+		md.Data = append(md.Data, repodata.DataEntry{
+			Type: d.typ, ChecksumType: "sha256", Checksum: sum, OpenChecksum: sum, Location: href,
+			Timestamp: 1, Size: int64(len(d.body)), OpenSize: int64(len(d.body)),
+		})
+	}
+	if err := os.WriteFile(filepath.Join(dir, repomdPath), repodata.WriteRepomd(md), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

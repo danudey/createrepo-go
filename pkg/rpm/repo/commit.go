@@ -65,6 +65,9 @@ type metadataSet struct {
 // set it returns the Plan without transferring anything.
 func (r *Repo) Commit(ctx context.Context) (*Plan, error) {
 	pkgs := r.idx.Packages()
+	if err := checkLocations(pkgs); err != nil {
+		return nil, err
+	}
 
 	plan, err := r.buildPlan(ctx, pkgs)
 	if err != nil {
