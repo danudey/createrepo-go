@@ -3,6 +3,8 @@ package backend
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -176,7 +178,13 @@ func (s *sftpBackend) Put(_ context.Context, relpath string, r io.Reader, _ int6
 		return err
 	}
 	// Upload to a temp path then rename, so readers never see a partial file.
-	tmp := dst + ".crtmp"
+	// The name is unique, so two publishers writing the same file cannot
+	// write into each other's upload.
+	suffix, err := tempSuffix()
+	if err != nil {
+		return err
+	}
+	tmp := dst + ".crtmp-" + suffix
 	f, err := s.client.Create(tmp)
 	if err != nil {
 		return err
@@ -190,14 +198,9 @@ func (s *sftpBackend) Put(_ context.Context, relpath string, r io.Reader, _ int6
 		_ = s.client.Remove(tmp)
 		return err
 	}
-	// sftp rename does not overwrite on all servers; use PosixRename when available.
-	if err := s.client.PosixRename(tmp, dst); err != nil {
-		// Fall back to remove+rename.
-		_ = s.client.Remove(dst)
-		if err2 := s.client.Rename(tmp, dst); err2 != nil {
-			_ = s.client.Remove(tmp)
-			return err2
-		}
+	if err := replaceFile(s.client, tmp, dst, suffix); err != nil {
+		_ = s.client.Remove(tmp)
+		return err
 	}
 	return nil
 }
@@ -332,4 +335,50 @@ func (s *sftpBackend) Hash(_ context.Context, relpath, algo string) (string, boo
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// renamer is the part of an SFTP client replaceFile needs.
+type renamer interface {
+	HasExtension(name string) (string, bool)
+	PosixRename(oldname, newname string) error
+	Rename(oldname, newname string) error
+	Remove(path string) error
+}
+
+// replaceFile moves tmp over dst without ever leaving dst missing.
+//
+// A server with the posix-rename extension (OpenSSH, and most others) replaces
+// dst atomically, and any failure is final: dst is untouched. Plain SFTP v3
+// rename refuses to overwrite, so there the old file is moved aside first and
+// moved back if the new one cannot take its place. The old fallback deleted
+// dst on any rename error and then tried again, so a failure such as a full
+// disk or a dropped connection left repomd.xml or Release missing.
+func replaceFile(c renamer, tmp, dst, suffix string) error {
+	if _, ok := c.HasExtension("posix-rename@openssh.com"); ok {
+		return c.PosixRename(tmp, dst)
+	}
+	if err := c.Rename(tmp, dst); err == nil {
+		return nil
+	}
+	old := dst + ".crold-" + suffix
+	if err := c.Rename(dst, old); err != nil {
+		return fmt.Errorf("replace %s: %w", dst, err)
+	}
+	if err := c.Rename(tmp, dst); err != nil {
+		if restoreErr := c.Rename(old, dst); restoreErr != nil {
+			return fmt.Errorf("replace %s: %w; the previous file is at %s (restoring it failed: %w)", dst, err, old, restoreErr)
+		}
+		return fmt.Errorf("replace %s: %w", dst, err)
+	}
+	_ = c.Remove(old)
+	return nil
+}
+
+// tempSuffix returns a random suffix for a temporary file name.
+func tempSuffix() (string, error) {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
