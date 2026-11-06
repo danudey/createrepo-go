@@ -144,10 +144,18 @@ func CopyExact(ctx context.Context, src, dst backend.Backend, objs []Object, opt
 	}
 
 	for _, obj := range objs {
-		present, err := DestinationMatches(ctx, dst, obj)
+		state, err := destinationState(ctx, dst, obj)
 		if err != nil {
 			return nil, err
 		}
+		// A file that differs from the source's is another repository's,
+		// or a damaged copy of this one: replacing it silently would lose
+		// whatever it was. The top-level index and its signatures change on
+		// every publish, so they are always replaced.
+		if state == destDiffers && !opt.Force {
+			return nil, fmt.Errorf("%w: %s at the destination differs from the source's; pass --force to replace it", ErrDestinationDiffers, obj.Path)
+		}
+		present := state == destMatches
 		if present && !opt.Force {
 			stats.Skipped++
 			opt.Tracker.Skip(1, 2*max(obj.Size, 0))
@@ -245,30 +253,78 @@ func pruneExtraneous(ctx context.Context, dst backend.Backend, objs []Object, op
 // metadata and computable remotely); otherwise the size has to stand in, except
 // for a Volatile object, which is always rewritten.
 func DestinationMatches(ctx context.Context, dst backend.Backend, obj Object) (bool, error) {
+	state, err := destinationState(ctx, dst, obj)
+	return state == destMatches, err
+}
+
+// ErrDestinationDiffers is returned by CopyExact for a destination file whose
+// content is known to differ from the source's.
+var ErrDestinationDiffers = errors.New("destination file differs")
+
+// destState is what is known about an object at the destination.
+type destState int
+
+const (
+	destAbsent  destState = iota
+	destMatches           // present with the source's content
+	destDiffers           // present, and known to hold something else
+	destUnknown           // present, but nothing tells whether it matches
+)
+
+// destinationState compares the destination's copy of obj with what the
+// metadata records. A volatile file is never reported as differing: it is
+// expected to change, and is always rewritten.
+func destinationState(ctx context.Context, dst backend.Backend, obj Object) (destState, error) {
 	fi, err := dst.Stat(ctx, obj.Path)
 	if errors.Is(err, backend.ErrNotExist) {
-		return false, nil
+		return destAbsent, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("stat %s: %w", obj.Path, err)
-	}
-	if obj.Verifiable() {
-		if hasher, ok := dst.(backend.RemoteHasher); ok {
-			sum, ok, herr := hasher.Hash(ctx, obj.Path, backend.AlgoSHA256)
-			if herr != nil && !errors.Is(herr, backend.ErrNotExist) {
-				return false, fmt.Errorf("remote hash %s: %w", obj.Path, herr)
-			}
-			if ok {
-				return strings.EqualFold(sum, obj.Checksum), nil
-			}
-		}
+		return destAbsent, fmt.Errorf("stat %s: %w", obj.Path, err)
 	}
 	if obj.Volatile {
-		return false, nil
+		if obj.Verifiable() {
+			if same, ok, err := remoteSame(ctx, dst, obj); err != nil || (ok && same) {
+				return destMatches, err
+			}
+		}
+		return destUnknown, nil
+	}
+	if obj.Size >= 0 && fi.Size != obj.Size {
+		return destDiffers, nil
+	}
+	if obj.Verifiable() {
+		same, ok, err := remoteSame(ctx, dst, obj)
+		if err != nil {
+			return destAbsent, err
+		}
+		if ok {
+			if same {
+				return destMatches, nil
+			}
+			return destDiffers, nil
+		}
+	}
+	if obj.Size < 0 {
+		return destUnknown, nil
 	}
 	// Content-addressed or immutable once written, so an equal length means an
 	// equal file.
-	return obj.Size >= 0 && fi.Size == obj.Size, nil
+	return destMatches, nil
+}
+
+// remoteSame asks a backend that can hash content whether its copy of obj has
+// the recorded checksum. ok is false when the backend cannot say.
+func remoteSame(ctx context.Context, dst backend.Backend, obj Object) (same, ok bool, err error) {
+	hasher, can := dst.(backend.RemoteHasher)
+	if !can {
+		return false, false, nil
+	}
+	sum, ok, err := hasher.Hash(ctx, obj.Path, backend.AlgoSHA256)
+	if err != nil && !errors.Is(err, backend.ErrNotExist) {
+		return false, false, fmt.Errorf("remote hash %s: %w", obj.Path, err)
+	}
+	return strings.EqualFold(sum, obj.Checksum), ok, nil
 }
 
 // FetchToTemp streams obj from be into a temporary file, verifying its size and

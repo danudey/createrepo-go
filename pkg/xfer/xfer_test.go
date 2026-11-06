@@ -183,3 +183,56 @@ func TestHashObject(t *testing.T) {
 		t.Errorf("HashObject = %s, %d, %v; want %s, 5", got, n, err, sum("hello"))
 	}
 }
+
+// A destination file that differs from the source's belongs to another
+// repository or is damaged: CopyExact must refuse rather than silently replace
+// it, unless forced. The top-level index changes on every publish and is
+// always replaced.
+func TestCopyExactRefusesADifferingFileUnlessForced(t *testing.T) {
+	ctx := context.Background()
+	src := newRepo(t, map[string]string{"pool/a.deb": "package", "Release": "new"})
+	objs := []Object{
+		{Path: "pool/a.deb", Size: 7, Checksum: sum("package")},
+		{Path: "Release", Size: 3, Volatile: true},
+	}
+	read := func(be backend.Backend, p string) string {
+		data, err := ReadAll(ctx, be, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+
+	// Different length: known to differ even without a content hash.
+	dst := newRepo(t, map[string]string{"pool/a.deb": "someone else's", "Release": "old"})
+	_, err := CopyExact(ctx, src, dst, objs, CopyOptions{})
+	if !errors.Is(err, ErrDestinationDiffers) {
+		t.Fatalf("CopyExact over a differing package = %v, want ErrDestinationDiffers", err)
+	}
+	if got := read(dst, "pool/a.deb"); got != "someone else's" {
+		t.Errorf("the refused copy changed pool/a.deb to %q", got)
+	}
+
+	// Same length, different content: the local backend hashes it.
+	dst = newRepo(t, map[string]string{"pool/a.deb": "PACKAGE", "Release": "old"})
+	if _, err := CopyExact(ctx, src, dst, objs, CopyOptions{}); !errors.Is(err, ErrDestinationDiffers) {
+		t.Errorf("CopyExact over a same-size differing package = %v, want ErrDestinationDiffers", err)
+	}
+
+	// Forced: replaced.
+	if _, err := CopyExact(ctx, src, dst, objs, CopyOptions{Force: true}); err != nil {
+		t.Fatalf("forced copy: %v", err)
+	}
+	if got := read(dst, "pool/a.deb"); got != "package" {
+		t.Errorf("a forced copy left pool/a.deb as %q", got)
+	}
+
+	// A changed Release alone is the normal case and needs no force.
+	dst = newRepo(t, map[string]string{"pool/a.deb": "package", "Release": "old"})
+	if _, err := CopyExact(ctx, src, dst, objs, CopyOptions{}); err != nil {
+		t.Fatalf("copy over an outdated Release: %v", err)
+	}
+	if got := read(dst, "Release"); got != "new" {
+		t.Errorf("Release = %q, want the source's", got)
+	}
+}
