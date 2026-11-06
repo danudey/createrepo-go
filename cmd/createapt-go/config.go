@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/danudey/createrepo-go/internal/cli"
 
@@ -126,6 +127,13 @@ func applyConfigDefaults(cmd *cobra.Command, cfg *repoconfig.Config) error {
 	if !fl.Changed("component") && cfg.Component != "" {
 		gf.component = cfg.Component
 	}
+	if !fl.Changed("validity") && cfg.Validity != "" {
+		v, err := time.ParseDuration(cfg.Validity)
+		if err != nil || v < 0 {
+			return fmt.Errorf("recorded validity %q in %s is not a duration", cfg.Validity, repoconfig.Path)
+		}
+		gf.validity = v
+	}
 	if !fl.Changed("pool-layout") {
 		gf.poolLayout = cfg.PoolLayout
 	}
@@ -202,6 +210,10 @@ func effectiveConfig(cmd *cobra.Command, prev *repoconfig.Config, name, baseURL 
 	cfg.Codename = gf.codename
 	cfg.Version = gf.releaseVersion
 	cfg.Description = gf.description
+	cfg.Validity = ""
+	if gf.validity > 0 {
+		cfg.Validity = gf.validity.String()
+	}
 	cfg.SignRelease = gf.signRelease
 	if gf.signRelease {
 		if fpr, err := sign.Fingerprint(gf.gpgKey, gf.gpgKeyID); err != nil {
