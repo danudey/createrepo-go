@@ -9,9 +9,12 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	"github.com/ProtonMail/go-crypto/openpgp/clearsign"
+	"github.com/ProtonMail/go-crypto/openpgp/packet"
 )
 
 // testKey generates a throwaway signing key and writes it out as an armored
@@ -326,5 +329,68 @@ func TestGPGSignerAgreesWithGPG(t *testing.T) {
 	}
 	if _, err := Fingerprint("", "keyring@example.invalid"); err != nil {
 		t.Errorf("gpg rejected the non-interactive --fingerprint invocation: %v", err)
+	}
+}
+
+// issuerOf returns the issuer key id of the first signature packet in an
+// armored signature or clearsigned document.
+func issuerOf(t *testing.T, signed []byte, clearsigned bool) uint64 {
+	t.Helper()
+	var body io.Reader
+	if clearsigned {
+		block, _ := clearsign.Decode(signed)
+		if block == nil {
+			t.Fatal("not a clearsigned document")
+		}
+		body = block.ArmoredSignature.Body
+	} else {
+		blk, err := armor.Decode(bytes.NewReader(signed))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body = blk.Body
+	}
+	p, err := packet.Read(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, ok := p.(*packet.Signature)
+	if !ok || sig.IssuerKeyId == nil {
+		t.Fatalf("no issuer in %T", p)
+	}
+	return *sig.IssuerKeyId
+}
+
+// With a signing subkey, InRelease and Release.gpg must both be signed by it.
+// Before, InRelease used the primary key, which on a production key is often
+// certify-only, so gpgv rejected the file apt prefers.
+func TestClearsignUsesTheSigningSubkey(t *testing.T) {
+	entity, err := openpgp.NewEntity("createapt test", "", "test@example.invalid", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := entity.AddSigningSubkey(nil); err != nil {
+		t.Fatal(err)
+	}
+	key, ok := entity.SigningKey(time.Now())
+	if !ok || key.PublicKey.KeyId == entity.PrimaryKey.KeyId {
+		t.Fatal("fixture: the entity does not prefer its signing subkey")
+	}
+	s := &Signer{entity: entity}
+	data := []byte("Origin: Example\nSuite: bookworm\n")
+
+	detached, err := s.SignDetached(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inline, err := s.SignClearsigned(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := issuerOf(t, detached, false); got != key.PublicKey.KeyId {
+		t.Errorf("Release.gpg issuer = %X, want the signing subkey %X", got, key.PublicKey.KeyId)
+	}
+	if got := issuerOf(t, inline, true); got != key.PublicKey.KeyId {
+		t.Errorf("InRelease issuer = %X, want the signing subkey %X (primary is %X)", got, key.PublicKey.KeyId, entity.PrimaryKey.KeyId)
 	}
 }
