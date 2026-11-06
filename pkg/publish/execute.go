@@ -1,7 +1,9 @@
 package publish
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -41,6 +43,39 @@ type Steps struct {
 	// GC is deleted last, group by group: superseded metadata, files nothing
 	// references any longer, relocation sources.
 	GC [][]string
+	// Guard is the top-level index as this publish read it. Execute checks it
+	// before writing anything and again just before the swap, and stops if
+	// another publish has changed it in between, rather than replacing that
+	// publish's index with one that does not know about its changes.
+	Guard []Unchanged
+}
+
+// Unchanged is a file as a publish read it: its content, or that it did not
+// exist.
+type Unchanged struct {
+	Path   string
+	Exists bool
+	Data   []byte
+}
+
+// ErrConcurrentPublish is returned by Execute when the top-level index changed
+// after the publish read it.
+var ErrConcurrentPublish = errors.New("the repository was changed by another publish while this one ran")
+
+// checkGuard reports ErrConcurrentPublish if any guarded file is not as it was.
+func checkGuard(ctx context.Context, be backend.Backend, guard []Unchanged) error {
+	for _, g := range guard {
+		data, err := xfer.ReadAll(ctx, be, g.Path)
+		exists := err == nil
+		if err != nil && !errors.Is(err, backend.ErrNotExist) {
+			return fmt.Errorf("re-read %s: %w", g.Path, err)
+		}
+		if exists != g.Exists || !bytes.Equal(data, g.Data) {
+			return fmt.Errorf("%w: %s is not what it was when this run read it; "+
+				"nothing was replaced, so run again to publish on top of the other change", ErrConcurrentPublish, g.Path)
+		}
+	}
+	return nil
 }
 
 // work counts what Execute is about to do, for the overall progress bar: every
@@ -66,8 +101,13 @@ func (s Steps) work() (items int, bytes int64) {
 // Execute performs a publish. tr, which may be nil, reports it as one
 // operation covering every write and deletion.
 func Execute(ctx context.Context, be backend.Backend, s Steps, tr *progress.Tracker) error {
-	items, bytes := s.work()
-	tr.Begin("publish", items, bytes)
+	// Checked first so a run that has already lost does no work, and again
+	// before the swap, which is what keeps the window small.
+	if err := checkGuard(ctx, be, s.Guard); err != nil {
+		return err
+	}
+	items, size := s.work()
+	tr.Begin("publish", items, size)
 	defer tr.End()
 
 	// 1. Relocate identical files server-side. The old copy is removed during
@@ -98,6 +138,9 @@ func Execute(ctx context.Context, be backend.Backend, s Steps, tr *progress.Trac
 	}
 
 	// 4. Swap the top-level index last — the atomic publish point.
+	if err := checkGuard(ctx, be, s.Guard); err != nil {
+		return err
+	}
 	for _, f := range s.Swap {
 		if err := putBytes(ctx, be, f, tr); err != nil {
 			return fmt.Errorf("write %s: %w", f.Path, err)
