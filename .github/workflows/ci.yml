@@ -7,7 +7,7 @@ name: CI
 #
 #   test         does the code work. Runs the real test suite on real hardware,
 #                so it can only cover architectures GitHub gives us runners
-#                for: x86-64 and arm64 on Linux, macOS and Windows.
+#                for: x86-64 and arm64 on Linux, and x86-64 on Windows.
 #
 #   cross-build  does the code still compile everywhere else. Go cross-compiles
 #                without a toolchain per target, so this is cheap, and it
@@ -82,7 +82,10 @@ jobs:
         os:
           - ubuntu-latest
           - ubuntu-24.04-arm
-          - macos-latest
+          # No macos-latest: GitHub's macOS runners are often unavailable, so
+          # the job was cancelled before it ran far more often than it found
+          # anything. The darwin/amd64 cross-build below still catches code
+          # that stops compiling for macOS.
           - windows-latest
           # Uncomment for arm64 Windows. Slower to schedule than the others.
           # - windows-11-arm
@@ -119,7 +122,7 @@ jobs:
         run: ./reference/apt/gen.sh
 
       # The race detector needs cgo, so it does not work on every platform,
-      # but it does on all four of the runners above. It roughly doubles the
+      # but it does on all three of the runners above. It roughly doubles the
       # test wall time and is worth it: a data race that only shows up under
       # load is otherwise found by a user.
       - name: Test
