@@ -533,6 +533,10 @@ source has no such constraint.
   files its metadata references; anything else it stores is invisible and is
   reported as such. The by-hash copies are still found, because their paths
   follow from the checksums the `Release` lists.
+- An exact copy refuses to replace a destination file whose content is known
+  to differ from the source's (a package of another repository, or a damaged
+  one), and names it. `--overwrite` or `--force` replaces it. The top-level
+  index and its signatures change on every publish and are always replaced.
 - `--overwrite` deletes destination files the source does not have, so it asks
   for confirmation first unless `--yes` or `--dry-run` is given.
 
