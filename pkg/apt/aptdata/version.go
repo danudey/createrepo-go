@@ -28,23 +28,37 @@ func ParseVersion(s string) (Version, error) {
 		return v, fmt.Errorf("empty version")
 	}
 
-	// Epoch: digits before the first colon. A colon with a non-numeric prefix
-	// is part of the upstream version (which may legally contain colons once an
-	// epoch is present), so only a fully numeric prefix counts.
+	// Epoch: everything before the first colon, read as dpkg reads it (with
+	// strtol, so one leading "+" is allowed). Anything else that is not a
+	// decimal number is an error, as it is to dpkg: before, a prefix that was
+	// not a number made the colon part of the upstream version instead.
+	// Colons after the first belong to the upstream part.
 	if i := strings.Index(raw, ":"); i >= 0 {
-		if n, err := strconv.Atoi(raw[:i]); err == nil && i > 0 {
-			if n < 0 {
-				return v, fmt.Errorf("negative epoch in %q", s)
-			}
-			v.Epoch = n
-			raw = raw[i+1:]
+		epoch := strings.TrimPrefix(raw[:i], "+")
+		if epoch == "" {
+			return v, fmt.Errorf("version %q has an empty epoch", s)
 		}
+		for _, c := range []byte(epoch) {
+			if !isDigit(c) {
+				return v, fmt.Errorf("version %q: epoch is not a number", s)
+			}
+		}
+		n, err := strconv.ParseInt(epoch, 10, 32)
+		if err != nil {
+			return v, fmt.Errorf("version %q: epoch is too big", s)
+		}
+		v.Epoch = int(n)
+		raw = raw[i+1:]
 	}
 
 	// Revision: everything after the *last* hyphen. A version with no hyphen is
-	// a Debian-native package and has no revision.
+	// a Debian-native package and has no revision; a trailing hyphen is an
+	// empty revision, which dpkg rejects.
 	if i := strings.LastIndex(raw, "-"); i >= 0 {
 		v.Upstream, v.Revision = raw[:i], raw[i+1:]
+		if v.Revision == "" {
+			return v, fmt.Errorf("version %q has an empty revision", s)
+		}
 	} else {
 		v.Upstream = raw
 	}
