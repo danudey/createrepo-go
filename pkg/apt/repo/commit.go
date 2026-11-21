@@ -111,8 +111,9 @@ func (r *Repo) Commit(ctx context.Context) (*Plan, error) {
 		// the document, so it is never internally inconsistent, and it is
 		// written last because it is the file apt prefers, making it the point
 		// at which modern clients see the new suite.
-		Swap: []publish.File{{Path: aptdata.ReleasePath(suite), Data: meta.release}},
-		GC:   [][]string{plan.ObsoleteMeta, plan.DeletedFiles, plan.UnreferencedFiles, plan.StaleMetadata},
+		Swap:  []publish.File{{Path: aptdata.ReleasePath(suite), Data: meta.release}},
+		Guard: r.loaded,
+		GC:    [][]string{plan.ObsoleteMeta, plan.DeletedFiles, plan.UnreferencedFiles, plan.StaleMetadata},
 	}
 	// By-hash copies first, so a Release that names them is never published
 	// ahead of the file it points at.
@@ -131,6 +132,11 @@ func (r *Repo) Commit(ctx context.Context) (*Plan, error) {
 	}
 	if err := publish.Execute(ctx, r.be, steps, r.opt.Tracker); err != nil {
 		return nil, err
+	}
+	// A later Commit on this Repo builds on what this one published.
+	r.loaded = []publish.Unchanged{
+		{Path: aptdata.ReleasePath(suite), Exists: true, Data: meta.release},
+		{Path: aptdata.InReleasePath(suite), Exists: meta.inRelease != nil, Data: meta.inRelease},
 	}
 	return plan, nil
 }
