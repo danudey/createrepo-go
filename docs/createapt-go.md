@@ -248,11 +248,45 @@ publish, so there is no flag to opt into blob cleanup.
 --keyring FILE            public keyring to verify against (repeatable)
 --gpg-key FILE            private key file (signing)
 --gpg-key-id ID           key id/uid from the local keyring (signing)
+--gpg-key-url URL         URL users fetch the public key from (what Signed-By
+                          is installed from); recorded, and every signature is
+                          checked against it
 --gpg-passphrase / $CREATEAPT_GPG_PASSPHRASE
 --gpg-no-prompt / $CREATEAPT_GPG_NO_PROMPT
                           never let gpg ask for a key passphrase; fail instead of
                           prompting (use in CI, where a prompt hangs the job)
 ```
+
+### Checking signatures against your users' key
+
+Every signature a run makes (`Release.gpg` and `InRelease`) is
+checked as soon as it is made:
+
+- It must come from the configured key or one of its subkeys. A signature by
+  any other key (for example, a `--gpg-key-id` uid that matches two keys)
+  fails the run before anything is published.
+- When the command finishes, it prints `warning:` lines for anything that
+  could stop users verifying the repository, then a `signatures:` summary line.
+
+Pass `--gpg-key-url` once with the URL your users fetch the public key from
+(the key file your install instructions download for `Signed-By`). It is saved as `gpg_key_url` in `createapt-go.json`, and later runs
+fetch that key and verify each new signature against it. The warnings cover:
+
+- a signature made by a **subkey** rather than the primary key. gpg picks a
+  signing subkey automatically, and users can verify it only if the public key
+  they install includes that subkey
+- a published key that **does not verify** the signatures, because it is a
+  different key or because it lacks the signing subkey (export it with
+  `gpg --armor --export <fingerprint>`, which includes subkeys)
+- a key that **expires** within 30 days, or a published copy that expires
+  earlier than your keyring's copy
+- a published key file that is served over plain **http**, cannot be fetched,
+  or contains **private** key material
+- signatures using a digest clients refuse (SHA-1, MD5)
+
+Without a key URL, the run still reports subkey signatures and expiring keys,
+and the summary line says the signatures were not checked against your users'
+key.
 
 ## Progress
 
@@ -560,6 +594,7 @@ source has no such constraint.
   "codename": "bookworm",
   "sign_release": true,
   "gpg_key_id": "FF652CAEF8C583AB827F219E992DF1A087059154",
+  "gpg_key_url": "https://downloads.example.com/apt/frobulator.asc",
   "copy_source": "https://downloads.example.com/apt"
 }
 ```
@@ -593,6 +628,10 @@ source has no such constraint.
   exactly that key rather than one of its subkeys. Anything else, such as a
   uid, is refused when the file is read, because the file may come from a
   repository you do not control.
+- `gpg_key_url` records `--gpg-key-url`: where users fetch the public key.
+  Every later signing run checks its signatures against the key found there
+  (see [Checking signatures against your users' key](#checking-signatures-against-your-users-key)).
+  It must be an http(s) URL.
 - The recorded settings act as **defaults**: a later run that omits the relevant
   flags re-uses them (re-signs the `Release` with the same key, keeps the same
   suite and target profile). Pass the flags explicitly to override — an explicit

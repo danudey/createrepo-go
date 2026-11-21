@@ -50,6 +50,10 @@ type Config struct {
 	SignatureFormat string `json:"signature_format,omitempty"`
 	// GPGKeyID is the primary-key fingerprint of the key used for signing.
 	GPGKeyID string `json:"gpg_key_id,omitempty"`
+	// GPGKeyURL is where the repository's users fetch the public key they
+	// verify it with (a .repo file's gpgkey=). Every signature a publish makes
+	// is checked against the key found there.
+	GPGKeyURL string `json:"gpg_key_url,omitempty"`
 
 	// CopySource records the repository this one was copied from (the source
 	// location given to `copy`). It lets a later `copy --continue` confirm that
@@ -73,6 +77,11 @@ func Load(ctx context.Context, be backend.Backend) (*Config, error) {
 	if cfg.GPGKeyID != "" {
 		if err := gpg.CheckKeyID(cfg.GPGKeyID); err != nil {
 			return nil, fmt.Errorf("%s: gpg_key_id: %w", Path, err)
+		}
+	}
+	if cfg.GPGKeyURL != "" {
+		if err := gpg.CheckKeyURL(cfg.GPGKeyURL); err != nil {
+			return nil, fmt.Errorf("%s: gpg_key_url: %w", Path, err)
 		}
 	}
 	return cfg, nil

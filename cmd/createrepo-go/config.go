@@ -102,6 +102,9 @@ func applyConfigDefaults(cmd *cobra.Command, cfg *repoconfig.Config) error {
 	if !fl.Changed("gpg-key") && !fl.Changed("gpg-key-id") && cfg.GPGKeyID != "" {
 		gf.gpgKeyID = cfg.GPGKeyID
 	}
+	if !fl.Changed("gpg-key-url") && cfg.GPGKeyURL != "" {
+		gf.gpgKeyURL = cfg.GPGKeyURL
+	}
 	return nil
 }
 
@@ -133,6 +136,9 @@ func effectiveConfig(cmd *cobra.Command, prev *repoconfig.Config, name, baseURL 
 	cfg.LocationPrefix = gf.locationPrefix
 	cfg.SignPackages = gf.signPackages
 	cfg.SignMetadata = gf.signMetadata
+	if gf.gpgKeyURL != "" {
+		cfg.GPGKeyURL = gf.gpgKeyURL
+	}
 	if gf.signPackages || gf.signMetadata {
 		cfg.SignatureFormat = gf.signatureFormat
 		if fpr, err := sign.Fingerprint(gf.gpgKey, gf.gpgKeyID); err != nil {

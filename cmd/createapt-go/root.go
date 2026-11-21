@@ -77,6 +77,7 @@ type globalFlags struct {
 	skipVerify    bool
 	gpgKey        string
 	gpgKeyID      string
+	gpgKeyURL     string
 	gpgPass       string
 	keyrings      []string
 
@@ -161,6 +162,8 @@ packages are never downloaded.`,
 		SilenceErrors:     true,
 		Version:           version,
 		PersistentPreRunE: preRunE,
+		// Only a command that succeeded reports: a failed one has said why.
+		PersistentPostRun: func(cmd *cobra.Command, _ []string) { signAudit.Report(cmd.ErrOrStderr()) },
 	}
 
 	pf := root.PersistentFlags()
@@ -191,6 +194,7 @@ packages are never downloaded.`,
 	pf.BoolVar(&gf.skipVerify, "skip-verify", false, "do not check the Release signature even when a key is available")
 	pf.StringVar(&gf.gpgKey, "gpg-key", "", "path to a GPG private key file (for signing)")
 	pf.StringVar(&gf.gpgKeyID, "gpg-key-id", "", "GPG key id/uid from the local keyring (for signing)")
+	pf.StringVar(&gf.gpgKeyURL, "gpg-key-url", "", "URL your users fetch the public key from (the key a sources entry's Signed-By names); recorded in "+repoconfig.Path+", and every signature made is checked against it")
 	pf.StringVar(&gf.gpgPass, "gpg-passphrase", "", "passphrase for the signing key (or set CREATEAPT_GPG_PASSPHRASE)")
 	pf.BoolVar(&gf.gpgNoPrompt, "gpg-no-prompt", cli.EnvBool("CREATEAPT_GPG_NO_PROMPT"), "never let gpg ask for a key passphrase; fail instead of prompting (or set CREATEAPT_GPG_NO_PROMPT=1). Use this in CI, where a prompt hangs the job")
 	pf.StringArrayVar(&gf.keyrings, "keyring", nil, "public keyring file to verify a repository's Release against (repeatable)")
@@ -216,6 +220,7 @@ func preRunE(cmd *cobra.Command, args []string) error {
 	cli.ApplyAWSEnv(gf.awsProfile, gf.awsRegion)
 	backend.InsecureIgnoreHostKey = gf.insecureIgnoreHostKey
 	gpg.NoPassphrasePrompt = gf.gpgNoPrompt
+	signAudit = nil
 	// The environment variable is read here rather than used as the flag's
 	// default, which --help would print.
 	if gf.gpgPass == "" {
@@ -256,7 +261,25 @@ func validateSigningFlags() error {
 	if gf.verifySigs && gf.skipVerify {
 		return fmt.Errorf("--verify-sigs and --skip-verify contradict each other")
 	}
+	if gf.gpgKeyURL != "" {
+		if err := gpg.CheckKeyURL(gf.gpgKeyURL); err != nil {
+			return fmt.Errorf("--gpg-key-url: %w", err)
+		}
+	}
 	return nil
+}
+
+// signAudit checks every signature this run makes (see gpg.Audit); it is
+// created with the first signer, once the recorded config has settled which
+// key signs, and reported when the command finishes.
+var signAudit *gpg.Audit
+
+// signingAudit returns the run's signature audit, creating it on first use.
+func signingAudit() *gpg.Audit {
+	if signAudit == nil {
+		signAudit = gpg.NewAudit(gf.gpgKey, gf.gpgKeyID, gf.gpgKeyURL)
+	}
+	return signAudit
 }
 
 // signingKeyGiven reports whether a key to sign with is available, from either
@@ -381,9 +404,13 @@ func repoOptions(create bool) (repo.Options, error) {
 func releaseSigner() (repo.Signer, error) {
 	switch {
 	case gf.gpgKey != "":
-		return sign.NewKeyFileSigner(gf.gpgKey, gf.gpgPass)
+		s, err := sign.NewKeyFileSigner(gf.gpgKey, gf.gpgPass)
+		if err != nil {
+			return nil, err
+		}
+		return s.WithAudit(signingAudit()), nil
 	case gf.gpgKeyID != "":
-		return sign.NewKeyIDSigner(gf.gpgKeyID, gf.gpgPass), nil
+		return sign.NewKeyIDSigner(gf.gpgKeyID, gf.gpgPass).WithAudit(signingAudit()), nil
 	default:
 		return nil, fmt.Errorf("signing the Release requires --gpg-key or --gpg-key-id (or --no-sign-release to publish unsigned)")
 	}

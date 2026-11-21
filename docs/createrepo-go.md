@@ -111,7 +111,7 @@ createrepo-go copy    <src> <dst>       # copy/mirror a repository to another lo
 createrepo-go create  <repo>            # initialize an empty repository (records config)
 createrepo-go takeover <repo>           # report what managing an existing repo with this tool would change
 createrepo-go list    <repo>            # list packages
-createrepo-go verify  <repo>            # check the published RPMs match the metadata
+createrepo-go verify  <repo|file.repo>  # check the published RPMs match the metadata
 createrepo-go check   <repo>            # deep-validate metadata + packages (levels)
 ```
 
@@ -147,11 +147,46 @@ keep working.)
                           --target release's rpm would (natively; no rpm needed)
 --gpg-key FILE            private key file (signing)
 --gpg-key-id ID           key id/uid from the local keyring (signing)
+--gpg-key-url URL         URL users fetch the public key from (a .repo file's
+                          gpgkey=); recorded, and every signature is checked
+                          against it
 --gpg-passphrase / $CREATEREPO_GPG_PASSPHRASE
 --gpg-no-prompt / $CREATEREPO_GPG_NO_PROMPT
                           never let gpg prompt for a passphrase, for metadata
                           or package signing; fail instead (for CI)
 ```
+
+### Checking signatures against your users' key
+
+Every signature a run makes (`repomd.xml.asc` and each RPM signed with `--sign-packages`) is
+checked as soon as it is made:
+
+- It must come from the configured key or one of its subkeys. A signature by
+  any other key (for example, a `--gpg-key-id` uid that matches two keys)
+  fails the run before anything is published.
+- When the command finishes, it prints `warning:` lines for anything that
+  could stop users verifying the repository, then a `signatures:` summary line.
+
+Pass `--gpg-key-url` once with the URL your users fetch the public key from
+(the `gpgkey=` in your `.repo` file). It is saved as `gpg_key_url` in `createrepo-go.json`, and later runs
+fetch that key and verify each new signature against it. The warnings cover:
+
+- a signature made by a **subkey** rather than the primary key. gpg picks a
+  signing subkey automatically, and users can verify it only if the public key
+  they install includes that subkey
+- a published key that **does not verify** the signatures, because it is a
+  different key or because it lacks the signing subkey (export it with
+  `gpg --armor --export <fingerprint>`, which includes subkeys)
+- a key that **expires** within 30 days, or a published copy that expires
+  earlier than your keyring's copy
+- a published key file that is served over plain **http**, cannot be fetched,
+  or contains **private** key material
+- signatures using a digest clients refuse (SHA-1, MD5), or a package signature the
+  `--target` release's rpm cannot read
+
+Without a key URL, the run still reports subkey signatures and expiring keys,
+and the summary line says the signatures were not checked against your users'
+key.
 
 ## Examples
 
@@ -558,6 +593,7 @@ the signing choices in effect:
   "sign_metadata": true,
   "signature_format": "v4",
   "gpg_key_id": "FF652CAEF8C583AB827F219E992DF1A087059154",
+  "gpg_key_url": "https://downloads.example.com/RPM-GPG-KEY-frobulator",
   "copy_source": "https://downloads.example.com/ee/rpms/el9"
 }
 ```
@@ -585,6 +621,10 @@ the signing choices in effect:
   exactly that key rather than one of its subkeys. Anything else, such as a
   uid, is refused when the file is read, because the file may come from a
   repository you do not control.
+- `gpg_key_url` records `--gpg-key-url`: where users fetch the public key.
+  Every later signing run checks its signatures against the key found there
+  (see [Checking signatures against your users' key](#checking-signatures-against-your-users-key)).
+  It must be an http(s) URL.
 - The recorded settings act as **defaults**: a later `add`/`remove` that omits
   the relevant flags re-uses them (e.g. re-signs `repomd.xml` with the same key,
   keeps the same target profile). Pass the flags explicitly to override — an
@@ -676,10 +716,20 @@ Signatures are checked whenever they are present, with no flag needed:
 - **Integrity.** A signature that does not match the package or `repomd.xml`
   it signs (damaged, or copied from another package) is always a problem. This
   needs no key.
-- **Trust.** Signatures are verified against trusted keys from `--keyring`,
-  or, failing that, the signing key `createrepo-go.json` records, exported from
-  the local GnuPG keyring. Without either, `verify` still identifies who signed
-  each package, but cannot prove it.
+- **Trust.** Signatures are verified against trusted keys: `--keyring` files
+  and published keys together, or, failing both, the signing key
+  `createrepo-go.json` records, exported from the local GnuPG keyring. Without
+  any, `verify` still identifies who signed each package, but cannot prove it.
+- **The key your users install.** Keys from `--keyring-url` (http(s) or
+  `file://`, repeatable) are trusted, and every signature present,
+  `repomd.xml`'s included, must verify against the trusted keys: a signature
+  that key cannot verify is one your users cannot verify either. Without
+  `--keyring-url`, the `gpg_key_url` that `createrepo-go.json` records is
+  fetched and checked for **consistency only**. `repomd.xml`'s signature must
+  verify against it, and every package signature must be by a key it contains.
+  It is never trusted, because the repository chose it and could otherwise
+  vouch for itself. When a signature was made by a subkey that the published
+  copy lacks, the problem says so.
 - **One key.** Every package must be signed by the same key. A package signed
   by another key, or an unsigned package in a signed repository, is a problem.
   When the config records a signing key, that key is the one every package
@@ -708,12 +758,41 @@ createrepo-go verify https://downloads.example.com/el9 --target rhel9 \
     --require-signed-packages --require-signed-metadata
 ```
 
+### Verifying from a `.repo` file
+
+`verify` also accepts a `.repo` file in place of a repository: a path, a
+`file://` URL or an http(s) URL ending in `.repo`. It verifies every enabled
+repository in the file the way a client using that file would:
+
+- the first `baseurl` is verified. A repository with only a `mirrorlist` or
+  `metalink` fails, because verify cannot follow those
+- its `gpgkey=` URLs are the published keys. A key that cannot be loaded is a
+  problem, since clients cannot import it either
+- `gpgcheck=1` (or `pkg_gpgcheck=1`) requires every RPM to carry a signature
+  the keys verify. `repo_gpgcheck=1` requires the same of `repomd.xml`. Either
+  one without a `gpgkey=` is a problem
+- variables are substituted from `--releasever` (which also sets
+  `$releasever_major` and `$releasever_minor`), `--arch` (sets both `$arch`
+  and `$basearch`) and `--var name=value`. Any variable without a value is an
+  error, reported before anything is fetched
+
+```sh
+createrepo-go verify ./example.repo --releasever 9 --arch x86_64
+```
+
+Each line of output is prefixed with the repository's `[id]`. The command
+fails if any repository fails.
+
 ### Flags
 
 ```
 --checksums                hash every RPM's content, downloading where necessary
 --concurrency N            packages to check in parallel (default 6)
 --keyring FILE             trusted public keys (repeatable)
+--keyring-url URL          trusted public keys fetched from a URL, as your users
+                           fetch them (repeatable); signatures must verify
+--releasever V, --arch A   values for a .repo file's $releasever and $arch/$basearch
+--var NAME=VALUE           value for any other .repo file variable (repeatable)
 --require-trusted          fail unless every signature verifies against a trusted key
 --require-signed-packages  fail unless every RPM is signed in a way the target accepts
 --require-signed-metadata  fail unless repomd.xml is signed

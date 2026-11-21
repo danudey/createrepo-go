@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ProtonMail/go-crypto/openpgp"
 
 	"github.com/danudey/createrepo-go/pkg/gpg"
 	"github.com/danudey/createrepo-go/pkg/rpm/pkgcheck"
@@ -46,6 +49,12 @@ type PackageSigner struct {
 	// already-signed package with a different key (rebuild --resign-packages);
 	// without it rpmsign would leave the previous key's signature in place.
 	Replace bool
+
+	// Audit, when set, checks each package's new signature right after
+	// rpmsign makes it (see gpg.Audit), judged by AuditPolicy's release. A
+	// package signed by a key other than the configured one fails to sign.
+	Audit       *gpg.Audit
+	AuditPolicy pkgcheck.Policy
 
 	keyID      string
 	gpgHome    string // throwaway GNUPGHOME when signing from a key file
@@ -203,7 +212,61 @@ func (s *PackageSigner) SignFileContext(ctx context.Context, src string) (string
 		cleanup()
 		return "", nil, fmt.Errorf("rpmsign %s: %w: %s", src, err, out)
 	}
+	if err := s.audit(ctx, dst); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("check the signature rpmsign made on %s: %w", src, err)
+	}
 	return dst, cleanup, nil
+}
+
+// audit hands the signatures on a just-signed package to s.Audit: who made
+// each, and whether it verifies against the configured key and the published
+// one. Only the header is read; its signatures are the ones every rpm checks.
+func (s *PackageSigner) audit(ctx context.Context, path string) error {
+	if s.Audit == nil {
+		return nil
+	}
+	local, published := s.Audit.Keys(ctx)
+	check := func(keys openpgp.EntityList) (*pkgcheck.Result, error) {
+		return pkgcheck.CheckFile(path, pkgcheck.Options{Keyring: keys, Policy: s.AuditPolicy, HeaderOnly: true})
+	}
+	res, err := check(local)
+	if err != nil {
+		return err
+	}
+	var pub *pkgcheck.Result
+	if published != nil {
+		if pub, err = check(published); err != nil {
+			return err
+		}
+	}
+	var issued, unreadable []gpg.Issued
+	for i, sig := range res.Signatures {
+		// A signature whose payload was not read says nothing either way.
+		if sig.KeyID == "" || sig.Status == pkgcheck.StatusUnchecked || sig.Status == pkgcheck.StatusUnsupported {
+			continue
+		}
+		is := gpg.Issued{KeyID: sig.KeyID, Refused: sig.Rejected}
+		if local != nil && sig.Status != pkgcheck.StatusGood {
+			is.LocalErr = errors.New(sig.Detail)
+		}
+		if pub != nil && i < len(pub.Signatures) && pub.Signatures[i].Status != pkgcheck.StatusGood {
+			is.PublishedErr = errors.New(pub.Signatures[i].Detail)
+		}
+		if !sig.Readable {
+			// The target's rpm ignores it; it counts only if nothing else
+			// identifies the signer, and then as a signature clients refuse.
+			is.Refused = "it is in a signature format " + policyName(s.AuditPolicy) + " cannot read, so the package installs there as unsigned"
+			unreadable = append(unreadable, is)
+			continue
+		}
+		issued = append(issued, is)
+	}
+	if len(issued) == 0 {
+		issued = unreadable
+	}
+	// rpmsign may leave an earlier key's signature beside the new one.
+	return s.Audit.Check(ctx, issued, true)
 }
 
 // macroKeyID returns the signing key in a form that is safe inside an rpm
