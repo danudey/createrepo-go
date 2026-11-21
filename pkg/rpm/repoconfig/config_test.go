@@ -2,6 +2,7 @@ package repoconfig
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
@@ -74,6 +75,24 @@ func TestSaveOverwrites(t *testing.T) {
 // The config is read from repositories this tool does not control, so a key id
 // that gpg would parse as an option, or rpm would expand as a macro, must be
 // refused on load. A fingerprint pinned with gpg's trailing "!" is accepted.
+func TestLoadChecksTheKeyURL(t *testing.T) {
+	be := newBackend(t)
+	ctx := context.Background()
+	if err := Save(ctx, be, &Config{GPGKeyURL: "file:///etc/passwd"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(ctx, be); err == nil || !strings.Contains(err.Error(), "gpg_key_url") {
+		t.Fatalf("Load = %v, want a gpg_key_url error", err)
+	}
+	if err := Save(ctx, be, &Config{GPGKeyURL: "https://example.com/RPM-GPG-KEY"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(ctx, be)
+	if err != nil || cfg.GPGKeyURL != "https://example.com/RPM-GPG-KEY" {
+		t.Fatalf("Load = %+v, %v", cfg, err)
+	}
+}
+
 func TestLoadChecksTheKeyID(t *testing.T) {
 	for keyID, ok := range map[string]bool{
 		"ABCDEF0123456789ABCDEF0123456789ABCDEF01!": true,

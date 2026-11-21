@@ -377,6 +377,9 @@ func applyCopyConfig(cfg *repoconfig.Config, srcLoc string, cf *copyFlags) {
 	case cf.baseURL != "":
 		cfg.BaseURL = cf.baseURL
 	}
+	if gf.gpgKeyURL != "" {
+		cfg.GPGKeyURL = gf.gpgKeyURL
+	}
 	cfg.CopySource = srcLoc
 }
 

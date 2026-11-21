@@ -173,6 +173,9 @@ func applyConfigDefaults(cmd *cobra.Command, cfg *repoconfig.Config) error {
 	if gf.signRelease && !keyOnCommandLine && cfg.GPGKeyID != "" {
 		gf.gpgKeyID = cfg.GPGKeyID
 	}
+	if !fl.Changed("gpg-key-url") && cfg.GPGKeyURL != "" {
+		gf.gpgKeyURL = cfg.GPGKeyURL
+	}
 	return nil
 }
 
@@ -215,6 +218,9 @@ func effectiveConfig(cmd *cobra.Command, prev *repoconfig.Config, name, baseURL 
 		cfg.Validity = gf.validity.String()
 	}
 	cfg.SignRelease = gf.signRelease
+	if gf.gpgKeyURL != "" {
+		cfg.GPGKeyURL = gf.gpgKeyURL
+	}
 	if gf.signRelease {
 		if fpr, err := sign.Fingerprint(gf.gpgKey, gf.gpgKeyID); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not resolve signing key fingerprint: %v\n", err)

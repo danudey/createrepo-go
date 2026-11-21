@@ -181,6 +181,10 @@ func packageSigner() (*sign.PackageSigner, func(), error) {
 	if err != nil {
 		return nil, func() {}, err
 	}
+	policy, err := targetPolicy()
+	if err != nil {
+		return nil, func() {}, err
+	}
 	switch {
 	case gf.gpgKey != "":
 		s, err := sign.NewPackageSignerKeyFile(gf.gpgKey, gf.gpgPass)
@@ -188,10 +192,12 @@ func packageSigner() (*sign.PackageSigner, func(), error) {
 			return nil, func() {}, err
 		}
 		s.Format = format
+		s.Audit, s.AuditPolicy = signingAudit(), policy
 		return s, s.Close, nil
 	case gf.gpgKeyID != "":
 		s := sign.NewPackageSignerKeyID(gf.gpgKeyID, gf.gpgPass)
 		s.Format = format
+		s.Audit, s.AuditPolicy = signingAudit(), policy
 		return s, func() {}, nil
 	default:
 		return nil, func() {}, fmt.Errorf("--sign-packages requires --gpg-key or --gpg-key-id")

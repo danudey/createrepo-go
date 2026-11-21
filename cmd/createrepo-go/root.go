@@ -15,6 +15,7 @@ import (
 	"github.com/danudey/createrepo-go/pkg/progress"
 	"github.com/danudey/createrepo-go/pkg/rpm/pkgcheck"
 	"github.com/danudey/createrepo-go/pkg/rpm/repo"
+	"github.com/danudey/createrepo-go/pkg/rpm/repoconfig"
 	"github.com/danudey/createrepo-go/pkg/rpm/sign"
 )
 
@@ -59,6 +60,7 @@ type globalFlags struct {
 	verifySigs      bool
 	gpgKey          string
 	gpgKeyID        string
+	gpgKeyURL       string
 	gpgPass         string
 	keyrings        []string
 
@@ -121,6 +123,8 @@ never downloaded.`,
 		SilenceErrors:     true,
 		Version:           version,
 		PersistentPreRunE: preRunE,
+		// Only a command that succeeded reports: a failed one has said why.
+		PersistentPostRun: func(cmd *cobra.Command, _ []string) { signAudit.Report(cmd.ErrOrStderr()) },
 	}
 
 	pf := root.PersistentFlags()
@@ -142,6 +146,7 @@ never downloaded.`,
 	pf.BoolVar(&gf.verifySigs, "verify-sigs", false, "verify each RPM's signature against --keyring before adding")
 	pf.StringVar(&gf.gpgKey, "gpg-key", "", "path to a GPG private key file (for signing)")
 	pf.StringVar(&gf.gpgKeyID, "gpg-key-id", "", "GPG key id/uid from the local keyring (for signing)")
+	pf.StringVar(&gf.gpgKeyURL, "gpg-key-url", "", "URL your users fetch the public key from (a .repo file's gpgkey=); recorded in "+repoconfig.Path+", and every signature made is checked against it")
 	pf.StringVar(&gf.gpgPass, "gpg-passphrase", "", "passphrase for the signing key (or set CREATEREPO_GPG_PASSPHRASE)")
 	pf.BoolVar(&gf.gpgNoPrompt, "gpg-no-prompt", cli.EnvBool("CREATEREPO_GPG_NO_PROMPT"), "never let gpg ask for a key passphrase while signing; fail instead of prompting (or set CREATEREPO_GPG_NO_PROMPT=1). Use this in CI, where a prompt hangs the job")
 	pf.StringArrayVar(&gf.keyrings, "keyring", nil, "public keyring file of trusted keys, for --verify-sigs, copy and verify (repeatable)")
@@ -162,6 +167,7 @@ func preRunE(cmd *cobra.Command, args []string) error {
 	cli.ApplyAWSEnv(gf.awsProfile, gf.awsRegion)
 	backend.InsecureIgnoreHostKey = gf.insecureIgnoreHostKey
 	gpg.NoPassphrasePrompt = gf.gpgNoPrompt
+	signAudit = nil
 	// The environment variable is read here rather than used as the flag's
 	// default, which --help would print.
 	if gf.gpgPass == "" {
@@ -189,7 +195,25 @@ func validateSigningFlags() error {
 	if gf.gpgKey != "" && gf.gpgKeyID != "" {
 		return fmt.Errorf("specify only one of --gpg-key or --gpg-key-id")
 	}
+	if gf.gpgKeyURL != "" {
+		if err := gpg.CheckKeyURL(gf.gpgKeyURL); err != nil {
+			return fmt.Errorf("--gpg-key-url: %w", err)
+		}
+	}
 	return nil
+}
+
+// signAudit checks every signature this run makes (see gpg.Audit); it is
+// created with the first signer, once the recorded config has settled which
+// key signs, and reported when the command finishes.
+var signAudit *gpg.Audit
+
+// signingAudit returns the run's signature audit, creating it on first use.
+func signingAudit() *gpg.Audit {
+	if signAudit == nil {
+		signAudit = gpg.NewAudit(gf.gpgKey, gf.gpgKeyID, gf.gpgKeyURL)
+	}
+	return signAudit
 }
 
 // canonicalTarget maps a --target value, or an alias of one, to its profile
@@ -281,9 +305,13 @@ func repoOptions(create bool) (repo.Options, error) {
 func metadataSigner() (repo.Signer, error) {
 	switch {
 	case gf.gpgKey != "":
-		return sign.NewKeyFileSigner(gf.gpgKey, gf.gpgPass)
+		s, err := sign.NewKeyFileSigner(gf.gpgKey, gf.gpgPass)
+		if err != nil {
+			return nil, err
+		}
+		return s.WithAudit(signingAudit()), nil
 	case gf.gpgKeyID != "":
-		return sign.NewKeyIDSigner(gf.gpgKeyID, gf.gpgPass), nil
+		return sign.NewKeyIDSigner(gf.gpgKeyID, gf.gpgPass).WithAudit(signingAudit()), nil
 	default:
 		return nil, fmt.Errorf("--sign-metadata requires --gpg-key or --gpg-key-id")
 	}

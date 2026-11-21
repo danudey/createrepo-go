@@ -46,6 +46,17 @@ func TestApplyConfigDefaults(t *testing.T) {
 		}
 	})
 
+	t.Run("recorded key URL fills an unset flag and is saved back", func(t *testing.T) {
+		root := rootCmd()
+		apply(t, root, &repoconfig.Config{GPGKeyURL: "https://example.com/RPM-GPG-KEY"})
+		if gf.gpgKeyURL != "https://example.com/RPM-GPG-KEY" {
+			t.Errorf("gpgKeyURL = %q", gf.gpgKeyURL)
+		}
+		if cfg := effectiveConfig(root, nil, "", ""); cfg.GPGKeyURL != gf.gpgKeyURL {
+			t.Errorf("effectiveConfig GPGKeyURL = %q, want %q", cfg.GPGKeyURL, gf.gpgKeyURL)
+		}
+	})
+
 	t.Run("recorded target restores its profile defaults", func(t *testing.T) {
 		root := rootCmd()
 		apply(t, root, &repoconfig.Config{Target: "rhel9"})

@@ -101,6 +101,20 @@ type VerifyOptions struct {
 	// accepted.
 	RequireTrusted bool
 
+	// PublishedKeys is the public key the repository itself names as the one
+	// its users install (its recorded gpg_key_url), from PublishedKeySource.
+	// The repository chose it, so it is never trusted: it does not count
+	// towards Keyring. It is checked for consistency instead. repomd.xml's
+	// signature must verify against it, and every package signature must be
+	// by a key it contains, because a signature it cannot verify is one the
+	// repository's users cannot verify either.
+	PublishedKeys      openpgp.EntityList
+	PublishedKeySource string
+
+	// RequireTrustedMetadata is RequireTrusted for repomd.xml's signature
+	// alone, as a client with repo_gpgcheck=1 but gpgcheck=0 requires.
+	RequireTrustedMetadata bool
+
 	// RequireSignedPackages makes every package have to carry a signature
 	// the policy's release can read and accepts.
 	RequireSignedPackages bool
@@ -374,7 +388,10 @@ func (r *Repo) checkPackageSigners(checked []checkedPackage, opt VerifyOptions, 
 				res.Trusted[s.Signer()] = true
 			}
 			if opt.RequireTrusted && s.Status == pkgcheck.StatusUntrusted {
-				add(fmt.Sprintf("the %s signature is by key %s, which is not a trusted key", s.Tag, s.Signer()), false)
+				add(untrustedDetail("the "+s.Tag+" signature", s.Signer(), expected), false)
+			}
+			if d := unpublishedDetail("the "+s.Tag+" signature", s.KeyID, expected, opt); d != "" {
+				add(d, false)
 			}
 			if len(expected) > 0 && !expected[strings.ToLower(s.KeyID)] && !expected[longKeyID(s.Fingerprint)] {
 				add(fmt.Sprintf("the %s signature is by key %s, %s", s.Tag, s.Signer(), notExpected(opt)), opt.ExpectedKeyIncomplete)
@@ -473,6 +490,19 @@ func (r *Repo) checkMetadataSignature(ctx context.Context, opt VerifyOptions, re
 	for _, id := range opt.ExpectedKeyIDs {
 		expected[strings.ToLower(id)] = true
 	}
+	if len(opt.PublishedKeys) > 0 && detachedErr == nil {
+		published, _ := pkgcheck.CheckDetached(r.raw, data, opt.PublishedKeys, pkgcheck.Policy{})
+		for _, s := range published {
+			if s.Status == pkgcheck.StatusGood {
+				continue
+			}
+			d := unpublishedDetail("the repomd.xml signature", s.KeyID, expected, opt)
+			if d == "" {
+				d = fmt.Sprintf("the public key at %s does not verify the repomd.xml signature: %s", opt.PublishedKeySource, s.Detail)
+			}
+			add(d)
+		}
+	}
 	for _, s := range sigs {
 		switch {
 		case s.Status == pkgcheck.StatusBad:
@@ -484,8 +514,8 @@ func (r *Repo) checkMetadataSignature(ctx context.Context, opt VerifyOptions, re
 		case s.Rejected != "":
 			add("the repomd.xml signature will be refused: " + s.Rejected)
 		}
-		if opt.RequireTrusted && s.Status == pkgcheck.StatusUntrusted {
-			add(fmt.Sprintf("repomd.xml is signed by key %s, which is not a trusted key", s.Signer()))
+		if (opt.RequireTrusted || opt.RequireTrustedMetadata) && s.Status == pkgcheck.StatusUntrusted {
+			add(untrustedDetail("the repomd.xml signature", s.Signer(), expected))
 		}
 		if len(expected) > 0 && !expected[strings.ToLower(s.KeyID)] && !expected[longKeyID(s.Fingerprint)] {
 			pr := Problem{
@@ -500,6 +530,36 @@ func (r *Repo) checkMetadataSignature(ctx context.Context, opt VerifyOptions, re
 		}
 	}
 	return nil
+}
+
+// untrustedDetail words a signature no trusted key verifies. When the signer
+// is one of the repository's own key ids, the trusted key is the repository's
+// key minus the part that signs: the classic public key exported before a
+// signing subkey was added, or with its subkeys stripped.
+func untrustedDetail(what, signer string, expected map[string]bool) string {
+	d := fmt.Sprintf("%s is by key %s, which is not a trusted key", what, signer)
+	if expected[longKeyID(signer)] {
+		d += "; that key belongs to the repository's signing key, so the trusted copy of it lacks that subkey." +
+			" Export the key with gpg --armor --export, which includes its subkeys, and publish that"
+	}
+	return d
+}
+
+// unpublishedDetail words a signature by a key the published public key does
+// not contain, or returns "" when it contains it (or there is none).
+func unpublishedDetail(what, keyID string, expected map[string]bool, opt VerifyOptions) string {
+	if len(opt.PublishedKeys) == 0 || keyID == "" {
+		return ""
+	}
+	var id uint64
+	if _, err := fmt.Sscanf(keyID, "%x", &id); err == nil && len(opt.PublishedKeys.KeysById(id)) > 0 {
+		return ""
+	}
+	d := fmt.Sprintf("%s is by key %s, which the public key at %s does not contain, so the repository's users cannot verify it", what, keyID, opt.PublishedKeySource)
+	if expected[longKeyID(keyID)] {
+		d += "; that key is a subkey of the repository's signing key. Export the key with gpg --armor --export, which includes its subkeys, and publish that"
+	}
+	return d
 }
 
 // notExpected words a signature by a key other than the recorded one.

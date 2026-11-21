@@ -31,6 +31,16 @@ type Signer struct {
 	keyID string
 	// passphrase unlocks the key when gpg needs one supplied non-interactively.
 	passphrase string
+	// audit, when set, checks every signature right after it is made.
+	audit *Audit
+}
+
+// WithAudit returns a copy of s that hands every signature it makes to a
+// before returning it, failing the signing when a says the wrong key made it.
+func (s *Signer) WithAudit(a *Audit) *Signer {
+	c := *s
+	c.audit = a
+	return &c
 }
 
 // NewKeyFileSigner loads an OpenPGP private key from path (armored or binary)
@@ -74,6 +84,17 @@ func NewKeyIDSigner(keyID, passphrase string) *Signer {
 
 // SignDetached returns an ASCII-armored detached signature over data.
 func (s *Signer) SignDetached(data []byte) ([]byte, error) {
+	sig, err := s.signDetached(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.audit.Detached(data, sig); err != nil {
+		return nil, err
+	}
+	return sig, nil
+}
+
+func (s *Signer) signDetached(data []byte) ([]byte, error) {
 	if s.entity != nil {
 		var buf bytes.Buffer
 		if err := openpgp.ArmoredDetachSign(&buf, s.entity, bytes.NewReader(data), nil); err != nil {
@@ -88,6 +109,17 @@ func (s *Signer) SignDetached(data []byte) ([]byte, error) {
 
 // SignClearsigned wraps data in an OpenPGP clearsigned document.
 func (s *Signer) SignClearsigned(data []byte) ([]byte, error) {
+	doc, err := s.signClearsigned(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.audit.Clearsigned(doc); err != nil {
+		return nil, err
+	}
+	return doc, nil
+}
+
+func (s *Signer) signClearsigned(data []byte) ([]byte, error) {
 	if s.entity != nil {
 		// Sign with the key a detached signature would use: the signing
 		// subkey when there is one. The primary key of a production key is

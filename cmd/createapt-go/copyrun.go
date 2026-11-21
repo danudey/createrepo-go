@@ -262,6 +262,9 @@ func applyCopyConfig(cfg *repoconfig.Config, srcLoc string, cf *copyFlags) {
 	if cf.repoURL != "" {
 		cfg.BaseURL = cf.repoURL
 	}
+	if gf.gpgKeyURL != "" {
+		cfg.GPGKeyURL = gf.gpgKeyURL
+	}
 	cfg.CopySource = srcLoc
 }
 
