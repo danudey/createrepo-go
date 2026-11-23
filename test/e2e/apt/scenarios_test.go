@@ -238,9 +238,6 @@ func TestVerifyAndCheckDetectARewrittenPackage(t *testing.T) {
 	if _, err := tryCLI(t, "verify", dir); err == nil {
 		t.Error("verify passed on a repository whose package was rewritten")
 	}
-	if _, err := tryCLI(t, "check", "--level", "head", "--arch", "any", dir); err == nil {
-		t.Error("check passed on a repository whose package was rewritten")
-	}
 
 	// apt sees it as the mismatch users report.
 	apt := newAptClient(t)
@@ -254,7 +251,7 @@ func TestVerifyAndCheckDetectARewrittenPackage(t *testing.T) {
 	// rebuild re-reads the file and republishes an index that matches it.
 	cli(t, "rebuild", dir, "--yes")
 	cli(t, "verify", dir)
-	cli(t, "check", "--level", "fetch", "--arch", "any", "--versions", "all", dir)
+	cli(t, "verify", "--checksums", dir)
 }
 
 // TestCopyExactProducesAReplica mirrors a signed repository and proves the copy
@@ -351,9 +348,8 @@ func TestCopyFromReadOnlyHTTP(t *testing.T) {
 	server := httptest.NewServer(http.FileServer(http.Dir(src)))
 	defer server.Close()
 
-	// check reads it over HTTP.
-	cli(t, "check", "--level", "fetch", "--arch", "any", "--versions", "all",
-		"--suite", "bookworm", server.URL)
+	// verify reads it over HTTP.
+	cli(t, "verify", "--checksums", "--suite", "bookworm", server.URL)
 
 	// copy mirrors it to local disk. The source cannot list itself, so the run
 	// must say so rather than silently copying less than the whole thing.

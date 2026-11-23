@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"sort"
 	"strings"
@@ -69,8 +70,13 @@ type File struct {
 	Location string
 	// Size is the recorded size; 0 or less means none is recorded.
 	Size int64
-	// SHA256 is the recorded checksum, lowercase hex; empty means none.
-	SHA256 string
+	// Checksum is the recorded checksum, hex; empty means none.
+	Checksum string
+	// Algo is Checksum's type as the metadata names it (see NewHash); empty
+	// means sha256. Only sha256 can be had from a backend without reading the
+	// file, so any other type is proved by reading it, and in Cheap mode is
+	// left unconfirmed.
+	Algo string
 }
 
 // Wording names things in a format's own terms, so a report reads the way the
@@ -147,9 +153,17 @@ func CheckInspect(ctx context.Context, be backend.Backend, f File, mode Mode, w 
 		// different build or a damaged one.
 	}
 
-	if f.SHA256 == "" {
+	if f.Checksum == "" {
 		t.Unconfirmed++
 		return details, t, inspected
+	}
+	h, known := NewHash(f.Algo)
+	if !known {
+		fail(fmt.Sprintf("%s records a checksum of unknown type %q, which no client can check", w.Records, f.Algo))
+		return details, t, inspected
+	}
+	if !IsSHA256(f.Algo) {
+		return checkReading(ctx, be, f, mode, w, item, inspect, h, details, t)
 	}
 
 	// Content is authoritative. Use the backend's own hash only when it is
@@ -161,8 +175,8 @@ func CheckInspect(ctx context.Context, be backend.Backend, f File, mode Mode, w 
 			fail("checksum could not be computed: " + err.Error())
 			return details, t, inspected
 		case ok:
-			if !strings.EqualFold(sum, f.SHA256) {
-				fail(fmt.Sprintf("content checksum %s does not match %s", sum, w.recorded(f.SHA256)))
+			if !strings.EqualFold(sum, f.Checksum) {
+				fail(fmt.Sprintf("content checksum %s does not match %s", sum, w.recorded(f.Checksum)))
 			} else {
 				t.Verified++
 			}
@@ -181,8 +195,8 @@ func CheckInspect(ctx context.Context, be backend.Backend, f File, mode Mode, w 
 				return details, t, inspected
 			}
 			if ok {
-				if !strings.EqualFold(sum, f.SHA256) {
-					fail(fmt.Sprintf("the checksum %s recorded by the store does not match %s", sum, w.recorded(f.SHA256)))
+				if !strings.EqualFold(sum, f.Checksum) {
+					fail(fmt.Sprintf("the checksum %s recorded by the store does not match %s", sum, w.recorded(f.Checksum)))
 				} else {
 					t.Recorded++
 				}
@@ -194,13 +208,24 @@ func CheckInspect(ctx context.Context, be backend.Backend, f File, mode Mode, w 
 	}
 
 	// Content mode against a backend that cannot hash for us: read the object.
+	return checkReading(ctx, be, f, mode, w, item, inspect, h, details, t)
+}
+
+// checkReading proves f's checksum by reading it with h, in Content mode. In
+// Cheap mode it only counts the checksum as unconfirmed.
+func checkReading(ctx context.Context, be backend.Backend, f File, mode Mode, w Wording, item func() *progress.Item, inspect func(io.Reader) error, h hash.Hash, details []string, t Tally) ([]string, Tally, bool) {
+	fail := func(d string) { details = append(details, d) }
+	if mode != Content {
+		t.Unconfirmed++
+		return details, t, false
+	}
 	var it *progress.Item
 	if item != nil {
 		it = item()
 	}
-	sum, n, err := xfer.HashObjectWith(ctx, be, f.Location, it, inspect)
+	sum, n, err := xfer.HashObjectInto(ctx, be, f.Location, h, it, inspect)
 	it.Done()
-	inspected = inspect != nil && err == nil
+	inspected := inspect != nil && err == nil
 	t.Downloaded++
 	t.BytesRead += n
 	if err != nil {
@@ -210,8 +235,8 @@ func CheckInspect(ctx context.Context, be backend.Backend, f File, mode Mode, w 
 	if f.Size > 0 && n != f.Size {
 		fail(fmt.Sprintf("read %d bytes, but %s records a size of %d", n, w.Records, f.Size))
 	}
-	if !strings.EqualFold(sum, f.SHA256) {
-		fail(fmt.Sprintf("content checksum %s does not match %s", sum, w.recorded(f.SHA256)))
+	if !strings.EqualFold(sum, f.Checksum) {
+		fail(fmt.Sprintf("content checksum %s does not match %s", sum, w.recorded(f.Checksum)))
 		return details, t, inspected
 	}
 	t.Verified++

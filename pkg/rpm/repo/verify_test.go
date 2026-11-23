@@ -220,7 +220,7 @@ func TestDownloadEstimateOnlyCountsWhatMustBeTransferred(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n, size := r.DownloadEstimate(); n != 0 || size != 0 {
+	if n, size := r.DownloadEstimate(VerifyOptions{}); n != 0 || size != 0 {
 		t.Errorf("a backend that hashes content needs no download, got %d packages / %d bytes", n, size)
 	}
 	r.Close()
@@ -230,7 +230,7 @@ func TestDownloadEstimateOnlyCountsWhatMustBeTransferred(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	n, size := store.DownloadEstimate()
+	n, size := store.DownloadEstimate(VerifyOptions{})
 	if n != 2 || size <= 0 {
 		t.Errorf("a recording store must transfer every package: got %d packages / %d bytes", n, size)
 	}

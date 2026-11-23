@@ -16,12 +16,13 @@ import (
 
 	"github.com/danudey/createrepo-go/internal/cli"
 	"github.com/danudey/createrepo-go/pkg/backend"
-	"github.com/danudey/createrepo-go/pkg/checkcore"
+	"github.com/danudey/createrepo-go/pkg/clientfile"
 	"github.com/danudey/createrepo-go/pkg/gpg"
 	"github.com/danudey/createrepo-go/pkg/progress"
 	"github.com/danudey/createrepo-go/pkg/rpm/pkgcheck"
 	"github.com/danudey/createrepo-go/pkg/rpm/repo"
 	"github.com/danudey/createrepo-go/pkg/rpm/repoconfig"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
 	"github.com/danudey/createrepo-go/pkg/rpm/repofile"
 	"github.com/danudey/createrepo-go/pkg/rpm/sign"
 )
@@ -34,17 +35,34 @@ type verifyFlags struct {
 	requireSignedPackages bool
 	requireSignedMetadata bool
 	skipPackageContents   bool
+	metadataOnly          bool
 
 	// keyringURLs are public keys to trust, fetched like a .repo gpgkey=.
 	keyringURLs []string
-	// releasever, arch and vars give values to a .repo file's variables.
-	releasever string
-	arch       string
-	vars       []string
+	// releasevers and arches give a .repo file's $releasever and
+	// $arch/$basearch, one repository per combination it uses; arches also
+	// limit the packages checked. vars gives any other variable.
+	releasevers []string
+	arches      []string
+	vars        []string
+
+	// names, latestOnly limit which packages are checked.
+	names      []string
+	latestOnly bool
+
+	timeout time.Duration
+	verbose bool
 }
+
+// versionsAll and versionsLatest are the --versions values.
+const (
+	versionsAll    = "all"
+	versionsLatest = "latest"
+)
 
 func verifyCmd() *cobra.Command {
 	var vf verifyFlags
+	var versions string
 	cmd := &cobra.Command{
 		Use:   "verify <repo-url | file.repo>",
 		Short: "Check that the published RPMs match the metadata and are intact and signed",
@@ -111,6 +129,13 @@ error.
   createrepo-go verify ./example.repo --releasever 9 --arch x86_64`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			switch strings.ToLower(versions) {
+			case versionsAll:
+			case versionsLatest:
+				vf.latestOnly = true
+			default:
+				return fmt.Errorf("invalid --versions %q (want %s or %s)", versions, versionsAll, versionsLatest)
+			}
 			return runVerify(cmd, args[0], vf)
 		},
 	}
@@ -122,9 +147,14 @@ error.
 	f.BoolVar(&vf.requireSignedMetadata, "require-signed-metadata", false, "fail unless repomd.xml is signed (repomd.xml.asc)")
 	f.BoolVar(&vf.skipPackageContents, "skip-package-contents", false, "do not read the RPMs: skip their digest and signature checks")
 	f.StringArrayVar(&vf.keyringURLs, "keyring-url", nil, "URL of a public key to trust, as your users fetch it (http(s) or file://; repeatable). Every signature present must verify against the trusted keys")
-	f.StringVar(&vf.releasever, "releasever", "", "value for $releasever (and $releasever_major/_minor) in a .repo file")
-	f.StringVar(&vf.arch, "arch", "", "value for $arch and $basearch in a .repo file")
+	f.StringSliceVar(&vf.releasevers, "releasever", nil, "$releasever (and $releasever_major/_minor) values for a .repo file, comma-separated; each value is verified as its own repository")
+	f.StringSliceVar(&vf.arches, "arch", nil, "architectures to check, comma-separated: only their packages (and noarch) are checked, and in a .repo file each is substituted for $arch/$basearch as its own repository (default: every architecture)")
 	f.StringArrayVar(&vf.vars, "var", nil, "value for any other .repo file variable, as name=value (repeatable)")
+	f.StringSliceVar(&vf.names, "packages", nil, "package names to check, comma-separated (default: all)")
+	f.StringVar(&versions, "versions", versionsAll, "which versions of each package to check: all or latest")
+	f.BoolVar(&vf.metadataOnly, "metadata-only", false, "check the metadata alone (every repodata document, the repomd.xml signature, dependencies), not the package files")
+	f.DurationVar(&vf.timeout, "timeout", 60*time.Second, "give up on a backend operation that makes no progress for this long (0 to disable); a download that keeps making progress is never cut off")
+	f.BoolVarP(&vf.verbose, "verbose", "v", false, "print a line for every metadata document and package checked, not just problems")
 	return cmd
 }
 
@@ -132,7 +162,10 @@ func runVerify(cmd *cobra.Command, input string, vf verifyFlags) error {
 	if isRepoFile(input) {
 		return runVerifyRepoFile(cmd, input, vf)
 	}
-	t := verifyTarget{}
+	if len(vf.releasevers) > 0 || len(vf.vars) > 0 {
+		fmt.Fprintln(cmd.ErrOrStderr(), "warning: --releasever and --var apply only to a .repo file; they are ignored for a repository location")
+	}
+	t := verifyTarget{arches: vf.arches}
 	var err error
 	if t.keys, t.keySources, err = loadKeyURLs(cli.Ctx(cmd), vf.keyringURLs); err != nil {
 		return err
@@ -146,6 +179,8 @@ func runVerify(cmd *cobra.Command, input string, vf verifyFlags) error {
 type verifyTarget struct {
 	// label prefixes every line printed about the repository.
 	label string
+	// arches limits the packages checked; empty checks every architecture.
+	arches []string
 	// keys are published public keys (--keyring-url, a .repo gpgkey=); any
 	// signature present must verify against them.
 	keys       openpgp.EntityList
@@ -161,7 +196,8 @@ type verifyTarget struct {
 }
 
 // verifyOne verifies the repository at location, returning an error when it
-// fails.
+// fails. The metadata is checked first and on its own, so a repository whose
+// metadata is too broken to load still has every defect in it reported.
 func verifyOne(cmd *cobra.Command, location string, vf verifyFlags, t verifyTarget) error {
 	ctx := cli.Ctx(cmd)
 	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
@@ -170,6 +206,36 @@ func verifyOne(cmd *cobra.Command, location string, vf verifyFlags, t verifyTarg
 	if err != nil {
 		return err
 	}
+	be = backend.WithTimeout(be, vf.timeout)
+
+	meta := repo.CheckMetadata(ctx, be)
+	if vf.verbose {
+		for _, f := range meta.Files {
+			status := "ok  "
+			if !f.OK {
+				status = "FAIL"
+			}
+			fmt.Fprintf(out, "%s%s %s (%s): %s\n", t.label, status, f.Location, f.Type, f.Detail)
+		}
+	}
+	report := func(warnings, problems []repo.Problem) int {
+		for _, p := range warnings {
+			fmt.Fprintln(errOut, t.label+"WARNING:", p)
+		}
+		for _, p := range t.problems {
+			fmt.Fprintln(errOut, t.label+"PROBLEM:", p)
+		}
+		for _, p := range problems {
+			fmt.Fprintln(errOut, t.label+"PROBLEM:", p)
+		}
+		return len(problems) + len(t.problems)
+	}
+	if !meta.Usable() {
+		closeBackend(be)
+		report(meta.Warnings, meta.Problems)
+		return fmt.Errorf("%d problem(s) found; the package index cannot be read, so no package was checked", len(meta.Problems)+len(t.problems))
+	}
+
 	cfg, err := repoconfig.Load(ctx, be)
 	if err != nil {
 		closeBackend(be)
@@ -182,6 +248,7 @@ func verifyOne(cmd *cobra.Command, location string, vf verifyFlags, t verifyTarg
 		closeBackend(be)
 		return err
 	}
+	opts.MetadataCache = meta.Cache
 	r, err := repo.OpenWith(ctx, be, opts)
 	if err != nil {
 		return err
@@ -192,14 +259,24 @@ func verifyOne(cmd *cobra.Command, location string, vf verifyFlags, t verifyTarg
 	if err != nil {
 		return err
 	}
+	vopt.Names, vopt.Arches, vopt.LatestOnly, vopt.SkipPackages = vf.names, t.arches, vf.latestOnly, vf.metadataOnly
+	if vf.verbose {
+		vopt.Progress = func(p *repodata.Package, problems int) {
+			status := "ok  "
+			if problems > 0 {
+				status = "FAIL"
+			}
+			fmt.Fprintf(out, "%s%s %s (%s)\n", t.label, status, p.NEVRA(), p.Location)
+		}
+	}
 	if len(t.keySources) > 0 {
 		fmt.Fprintf(out, "%strusted keys: %s\n", t.label, strings.Join(t.keySources, ", "))
 	}
-	if vf.checksums {
+	if vf.checksums && !vf.metadataOnly {
 		vopt.Checksums = repo.ChecksumContent
 		// A full content check can be a large transfer; say so before
 		// starting rather than appearing to hang.
-		if n, size := r.DownloadEstimate(); n > 0 {
+		if n, size := r.DownloadEstimate(vopt); n > 0 {
 			fmt.Fprintf(out, "%shashing %d package(s) from %s: ~%s to download\n", t.label, n, r.Backend(), progress.Bytes(size))
 		}
 	}
@@ -208,19 +285,10 @@ func verifyOne(cmd *cobra.Command, location string, vf verifyFlags, t verifyTarg
 	if err != nil {
 		return err
 	}
-	for _, p := range res.Warnings {
-		fmt.Fprintln(errOut, t.label+"WARNING:", p)
-	}
-	for _, p := range t.problems {
-		fmt.Fprintln(errOut, t.label+"PROBLEM:", p)
-	}
-	for _, p := range res.Problems {
-		fmt.Fprintln(errOut, t.label+"PROBLEM:", p)
-	}
-	if n := len(res.Problems) + len(t.problems); n > 0 {
+	if n := report(append(meta.Warnings, res.Warnings...), append(meta.Problems, res.Problems...)); n > 0 {
 		return fmt.Errorf("%d problem(s) found", n)
 	}
-	fmt.Fprintln(out, t.label+verifySummary(res, !vf.skipPackageContents))
+	fmt.Fprintln(out, t.label+verifySummary(res, meta, vf))
 	return nil
 }
 
@@ -413,10 +481,6 @@ func runVerifyRepoFile(cmd *cobra.Command, input string, vf verifyFlags) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", input, err)
 	}
-	vars, err := repoVars(vf)
-	if err != nil {
-		return err
-	}
 	extraKeys, extraSources, err := loadKeyURLs(ctx, vf.keyringURLs)
 	if err != nil {
 		return err
@@ -425,19 +489,19 @@ func runVerifyRepoFile(cmd *cobra.Command, input string, vf verifyFlags) error {
 	// Every variable is resolved before anything is fetched, so a missing
 	// value is reported once, up front, rather than after other repositories
 	// were verified.
-	var enabled []repofile.Section
+	var enabled []expandedSection
 	var varErrs []string
 	for _, s := range sections {
 		if !s.Enabled {
 			fmt.Fprintf(out, "[%s] skipped: enabled=0\n", s.ID)
 			continue
 		}
-		exp, err := s.Expand(vars)
+		exp, err := expandSection(s, vf)
 		if err != nil {
 			varErrs = append(varErrs, err.Error())
 			continue
 		}
-		enabled = append(enabled, exp)
+		enabled = append(enabled, exp...)
 	}
 	if len(varErrs) > 0 {
 		return fmt.Errorf("%s: %s; supply values with --releasever, --arch or --var name=value", input, strings.Join(varErrs, "; "))
@@ -447,10 +511,9 @@ func runVerifyRepoFile(cmd *cobra.Command, input string, vf verifyFlags) error {
 	}
 
 	failed := 0
-	for _, s := range enabled {
-		label := "[" + s.ID + "] "
-		if err := verifySection(cmd, input, s, label, vf, extraKeys, extraSources); err != nil {
-			fmt.Fprintf(errOut, "%s%v\n", label, err)
+	for _, e := range enabled {
+		if err := verifySection(cmd, input, e, vf, extraKeys, extraSources); err != nil {
+			fmt.Fprintf(errOut, "%s%v\n", e.label, err)
 			failed++
 		}
 	}
@@ -461,8 +524,9 @@ func runVerifyRepoFile(cmd *cobra.Command, input string, vf verifyFlags) error {
 }
 
 // verifySection verifies one repository from a .repo file.
-func verifySection(cmd *cobra.Command, input string, s repofile.Section, label string, vf verifyFlags, extraKeys openpgp.EntityList, extraSources []string) error {
+func verifySection(cmd *cobra.Command, input string, e expandedSection, vf verifyFlags, extraKeys openpgp.EntityList, extraSources []string) error {
 	out := cmd.OutOrStdout()
+	s, label := e.Section, e.label
 	if len(s.BaseURLs) == 0 {
 		if s.MirrorList != "" {
 			return fmt.Errorf("it has only a mirrorlist/metalink, which verify cannot follow; verify a mirror's URL directly")
@@ -470,7 +534,7 @@ func verifySection(cmd *cobra.Command, input string, s repofile.Section, label s
 		return fmt.Errorf("it has no baseurl")
 	}
 	base := s.BaseURLs[0]
-	if err := checkcore.CheckTargetScheme(input, base); err != nil {
+	if err := clientfile.CheckTargetScheme(input, base); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "%sverifying %s (gpgcheck=%s, repo_gpgcheck=%s)\n", label, base, onOff(s.GPGCheck), onOff(s.RepoGPGCheck))
@@ -480,6 +544,7 @@ func verifySection(cmd *cobra.Command, input string, s repofile.Section, label s
 
 	t := verifyTarget{
 		label:        label,
+		arches:       e.arches,
 		fromRepoFile: true,
 		gpgCheck:     s.GPGCheck,
 		repoGPGCheck: s.RepoGPGCheck,
@@ -513,7 +578,7 @@ func onOff(b bool) string {
 func readRepoFile(ctx context.Context, input string) ([]byte, error) {
 	u, err := url.Parse(input)
 	if err == nil && (u.Scheme == "http" || u.Scheme == "https") {
-		data, err := checkcore.FetchOverHTTP(ctx, 30*time.Second, "createrepo-go/"+version)(input)
+		data, err := clientfile.FetchOverHTTP(ctx, 30*time.Second, "createrepo-go/"+version)(input)
 		if err != nil {
 			return nil, fmt.Errorf("fetch %s: %w", input, err)
 		}
@@ -526,27 +591,78 @@ func readRepoFile(ctx context.Context, input string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-// repoVars collects the values for a .repo file's variables. --arch fills
-// both $arch and $basearch, as dnf derives one from the other on most hosts.
-func repoVars(vf verifyFlags) (map[string]string, error) {
+// expandedSection is one repository a .repo section defines, with its
+// variables substituted.
+type expandedSection struct {
+	repofile.Section
+	// label prefixes its output: the section id and the values used.
+	label string
+	// arches limits the packages checked.
+	arches []string
+}
+
+// expandSection substitutes s's variables, once for each --releasever and
+// --arch value when s uses that variable, so "--releasever 8,9" verifies the
+// EL8 and EL9 repositories a single section describes. A variable s uses with
+// no value is an error.
+func expandSection(s repofile.Section, vf verifyFlags) ([]expandedSection, error) {
+	used := s.Vars()
+	rels, arches := []string{""}, []string{""}
+	if (used["releasever"] || used["releasever_major"] || used["releasever_minor"]) && len(vf.releasevers) > 0 {
+		rels = vf.releasevers
+	}
+	if (used["arch"] || used["basearch"]) && len(vf.arches) > 0 {
+		arches = vf.arches
+	}
+	var out []expandedSection
+	for _, rel := range rels {
+		for _, arch := range arches {
+			vars, err := repoVars(vf.vars, rel, arch)
+			if err != nil {
+				return nil, err
+			}
+			exp, err := s.Expand(vars)
+			if err != nil {
+				return nil, err
+			}
+			label := s.ID
+			if rel != "" {
+				label += " releasever=" + rel
+			}
+			e := expandedSection{Section: exp, arches: vf.arches}
+			if arch != "" {
+				label += " arch=" + arch
+				e.arches = []string{arch}
+			}
+			e.label = "[" + label + "] "
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+// repoVars collects the values for a .repo file's variables: --var, then one
+// $releasever and one $arch value. An arch fills both $arch and $basearch, as
+// dnf derives one from the other on most hosts.
+func repoVars(kvs []string, releasever, arch string) (map[string]string, error) {
 	vars := map[string]string{}
-	if vf.releasever != "" {
-		vars["releasever"] = vf.releasever
-		// dnf derives these from $releasever.
-		major, minor, _ := strings.Cut(vf.releasever, ".")
-		vars["releasever_major"] = major
-		vars["releasever_minor"] = minor
-	}
-	if vf.arch != "" {
-		vars["arch"] = vf.arch
-		vars["basearch"] = vf.arch
-	}
-	for _, kv := range vf.vars {
+	for _, kv := range kvs {
 		name, value, ok := strings.Cut(kv, "=")
 		if !ok || name == "" {
 			return nil, fmt.Errorf("--var %q: want name=value", kv)
 		}
 		vars[strings.TrimPrefix(name, "$")] = value
+	}
+	if releasever != "" {
+		vars["releasever"] = releasever
+		// dnf derives these from $releasever.
+		major, minor, _ := strings.Cut(releasever, ".")
+		vars["releasever_major"] = major
+		vars["releasever_minor"] = minor
+	}
+	if arch != "" {
+		vars["arch"] = arch
+		vars["basearch"] = arch
 	}
 	return vars, nil
 }
@@ -555,7 +671,17 @@ func repoVars(vf verifyFlags) (map[string]string, error) {
 // established — how each checksum was confirmed, how much of each package was
 // read, and who signed what — so the reader is never left assuming more was
 // proved than actually was.
-func verifySummary(res *repo.VerifyResult, readPackages bool) string {
+func verifySummary(res *repo.VerifyResult, meta *repo.MetadataReport, vf verifyFlags) string {
+	readPackages := !vf.skipPackageContents && !vf.metadataOnly
+	types := make([]string, 0, len(meta.Files))
+	for _, f := range meta.Files {
+		types = append(types, f.Type)
+	}
+	metaLine := fmt.Sprintf("metadata: %d document(s) intact (%s)", len(meta.Files), strings.Join(types, ", "))
+	if vf.metadataOnly {
+		return fmt.Sprintf("OK: %s; %d package(s) indexed, not checked (--metadata-only); dependencies satisfied\nrepomd.xml: %s",
+			metaLine, res.Packages, metadataSummary(res.Metadata))
+	}
 	var parts []string
 	if res.ChecksumVerified > 0 {
 		parts = append(parts, fmt.Sprintf("%d verified from content", res.ChecksumVerified))
@@ -568,14 +694,14 @@ func verifySummary(res *repo.VerifyResult, readPackages bool) string {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "OK: %d package(s) present with the expected size", res.Packages)
+	fmt.Fprintf(&b, "OK: %s\npackages: %d present with the expected size", metaLine, res.Packages)
 	if len(parts) > 0 {
 		b.WriteString("; checksums: " + strings.Join(parts, ", "))
 	}
 	b.WriteString("; dependencies satisfied")
 
 	if readPackages {
-		fmt.Fprintf(&b, "\npackages: %d intact", res.HeadersChecked)
+		fmt.Fprintf(&b, "\ncontents: %d intact", res.HeadersChecked)
 		switch headerOnly := res.HeadersChecked - res.PayloadsChecked; {
 		case headerOnly == 0:
 			b.WriteString(" (header and payload digests checked)")

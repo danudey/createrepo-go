@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"path"
@@ -146,12 +147,17 @@ func HashObject(ctx context.Context, be backend.Backend, relpath string, item *p
 // transfer, not two. inspect may stop reading early; the rest is still hashed.
 // A nil inspect is HashObject.
 func HashObjectWith(ctx context.Context, be backend.Backend, relpath string, item *progress.Item, inspect func(io.Reader) error) (string, int64, error) {
+	return HashObjectInto(ctx, be, relpath, sha256.New(), item, inspect)
+}
+
+// HashObjectInto is HashObjectWith with the hash to compute supplied, for a
+// checksum type other than sha256.
+func HashObjectInto(ctx context.Context, be backend.Backend, relpath string, h hash.Hash, item *progress.Item, inspect func(io.Reader) error) (string, int64, error) {
 	rc, err := be.Get(ctx, relpath)
 	if err != nil {
 		return "", 0, err
 	}
 	defer rc.Close()
-	h := sha256.New()
 	cw := &countWriter{w: item.Writer(h)}
 	src := io.TeeReader(rc, cw)
 	if inspect != nil {

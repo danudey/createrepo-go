@@ -7,16 +7,13 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
-	"sort"
 	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
 
-	"github.com/danudey/createrepo-go/pkg/checkcore"
 	"github.com/danudey/createrepo-go/pkg/progress"
 )
 
@@ -136,47 +133,4 @@ func DeletedSuffix(deleted int) string {
 		return ""
 	}
 	return fmt.Sprintf(", %d extraneous file(s) deleted", deleted)
-}
-
-// ReportCheck prints the issues and summary of a check run, returning whether
-// any check failed.
-func ReportCheck(out io.Writer, results []checkcore.Result) bool {
-	oks, fails, warns, skips := checkcore.Summarize(results)
-
-	// Failures, then warnings, at the top of the detail listing.
-	sorted := make([]checkcore.Result, len(results))
-	copy(sorted, results)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		return statusRank(sorted[i].Status) < statusRank(sorted[j].Status)
-	})
-
-	if fails > 0 || warns > 0 {
-		fmt.Fprintf(out, "\nIssues:\n")
-		for _, r := range sorted {
-			if r.Status == checkcore.StatusFail || r.Status == checkcore.StatusWarn {
-				fmt.Fprintf(out, "  [%s] %s :: %s\n        %s\n        %s\n", r.Status, r.Target, r.Kind, r.Detail, r.Loc)
-			}
-		}
-	}
-
-	fmt.Fprintf(out, "\nSummary: %d ok, %d failed, %d warnings, %d skipped\n", oks, fails, warns, skips)
-	if fails > 0 {
-		fmt.Fprintln(out, "RESULT: FAIL")
-		return true
-	}
-	fmt.Fprintln(out, "RESULT: OK")
-	return false
-}
-
-func statusRank(s checkcore.Status) int {
-	switch s {
-	case checkcore.StatusFail:
-		return 0
-	case checkcore.StatusWarn:
-		return 1
-	case checkcore.StatusSkip:
-		return 2
-	default:
-		return 3
-	}
 }

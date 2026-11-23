@@ -6,8 +6,6 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
-
-	"github.com/danudey/createrepo-go/pkg/checkcore"
 )
 
 func TestEnvBool(t *testing.T) {
@@ -47,24 +45,5 @@ func TestPromptYesNo(t *testing.T) {
 		if out.String() != "Proceed? [y/N] " {
 			t.Errorf("prompt = %q", out.String())
 		}
-	}
-}
-
-func TestReportCheckPutsFailuresFirstAndReportsTheResult(t *testing.T) {
-	var out bytes.Buffer
-	failed := ReportCheck(&out, []checkcore.Result{
-		{Kind: "fine", Status: checkcore.StatusOK},
-		{Kind: "odd", Status: checkcore.StatusWarn},
-		{Kind: "broken", Status: checkcore.StatusFail},
-	})
-	got := out.String()
-	if !failed || !strings.Contains(got, "RESULT: FAIL") {
-		t.Errorf("ReportCheck = %v, output %q; want a failure", failed, got)
-	}
-	if strings.Index(got, "broken") > strings.Index(got, "odd") {
-		t.Errorf("the failure is not listed before the warning:\n%s", got)
-	}
-	if !strings.Contains(got, "Summary: 1 ok, 1 failed, 1 warnings, 0 skipped") {
-		t.Errorf("summary missing or wrong:\n%s", got)
 	}
 }

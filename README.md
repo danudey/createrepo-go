@@ -48,13 +48,13 @@ Releases publish signed archives of each binary for every supported platform.
 | `pkg/xfer` | shared: fetch, verify, upload and hash files; the verbatim `copy` engine |
 | `pkg/publish` | shared: the publish planner (upload, skip, relocate, collect) and the write order that keeps a repository whole |
 | `pkg/integrity` | shared: the per-file presence, size and checksum check behind `verify` |
-| `pkg/checkcore` | shared: levels, results and collection for `check` |
+| `pkg/clientfile` | shared: fetching a `.repo` or sources file by URL, and limiting what one fetched that way may point at |
 | `pkg/gpg` | shared: OpenPGP signing, verification and key handling |
 | `pkg/compress` | shared: in-process decoding of gzip, zstd, xz and bzip2 metadata |
 | `pkg/configfile` | shared: load and save the per-repository JSON config |
 | `internal/cli`, `internal/parallel` | shared: command-line plumbing and a bounded worker pool |
-| `pkg/rpm/*` | rpm-md: `repodata` (data model and XML), `rpmmeta` (read an RPM), `pkgcheck` (check an RPM's digests and signatures natively, per target release), `repo` (load, mutate, publish, verify), `repocheck`, `repoconfig`, `sign`, `takeover` |
-| `pkg/apt/*` | apt: `aptdata` (deb822 model, `Packages`/`Sources`/`Release`, version comparison, layout), `debmeta` (read a `.deb` or `.dsc`), `repo`, `repocheck`, `repoconfig`, `sign` |
+| `pkg/rpm/*` | rpm-md: `repodata` (data model and XML), `rpmmeta` (read an RPM), `pkgcheck` (check an RPM's digests and signatures natively, per target release), `repo` (load, mutate, publish, verify), `repofile` (read a `.repo` file), `repoconfig`, `sign`, `takeover` |
+| `pkg/apt/*` | apt: `aptdata` (deb822 model, `Packages`/`Sources`/`Release`, version comparison, layout), `debmeta` (read a `.deb` or `.dsc`), `repo`, `sources` (read a sources file), `repoconfig`, `sign` |
 | `internal/rpm` | a vendored copy of `github.com/cavaliergopher/rpm`, hardened (see its `doc.go`) |
 | `internal/rpmtest` | builds signed and precisely damaged RPMs for tests, without rpmbuild or rpmsign |
 | `reference/rpm`, `reference/apt` | test fixtures and the scripts that generate them |

@@ -171,6 +171,11 @@ func ControlFromDeb(localPath string) (*aptdata.Paragraph, error) {
 	return controlFromReader(f)
 }
 
+// ControlFromReader reads a .deb from r far enough to parse its control
+// stanza: the ar members up to the control tarball, then ./control in it. It
+// leaves the rest of r unread.
+func ControlFromReader(r io.Reader) (*aptdata.Paragraph, error) { return controlFromReader(r) }
+
 // controlFromReader walks the ar members looking for the control tarball, then
 // walks that tarball looking for ./control.
 func controlFromReader(r io.Reader) (*aptdata.Paragraph, error) {

@@ -76,6 +76,19 @@ func TestExpand(t *testing.T) {
 	}
 }
 
+func TestSectionVars(t *testing.T) {
+	secs, err := Parse([]byte(sample))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := secs[0].Vars(), map[string]bool{"releasever": true, "basearch": true}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Vars = %v, want %v", got, want)
+	}
+	if got := secs[1].Vars(); len(got) != 0 {
+		t.Errorf("Vars of a section with no variables = %v", got)
+	}
+}
+
 func TestSectionExpandCoversKeys(t *testing.T) {
 	secs, err := Parse([]byte(sample))
 	if err != nil {

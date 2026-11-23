@@ -64,7 +64,7 @@ func openRepoBackend(cmd *cobra.Command, be backend.Backend, create bool) (*repo
 }
 
 // openRepoForRead opens a repository for a command that only inspects it
-// (list, verify, check). It applies the recorded defaults exactly as a
+// (list, verify). It applies the recorded defaults exactly as a
 // mutating command does — so `verify /srv/repo` checks the suite the
 // repository was published into, not whatever the default suite happens to be
 // — but never builds a signer, because nothing is going to be signed.

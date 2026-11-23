@@ -1,4 +1,7 @@
-package repocheck
+// Package sources reads apt sources files: the one-line sources.list format
+// (.list) and deb822 (.sources). Each entry names a repository a client
+// subscribes to: a base URI, a suite, and components.
+package sources
 
 import (
 	"fmt"
@@ -15,10 +18,10 @@ const (
 	typeSource = "deb-src"
 )
 
-// SourceEntry is one repository a client would subscribe to: a base URI, a
+// Entry is one repository a client would subscribe to: a base URI, a
 // suite, and the components within it. It is what a sources.list line or a
 // deb822 .sources stanza describes.
-type SourceEntry struct {
+type Entry struct {
 	// URI is the repository root the suite lives under.
 	URI string
 	// Suite is the dists/ subdirectory.
@@ -33,7 +36,7 @@ type SourceEntry struct {
 }
 
 // Label renders the entry the way a sources.list line does, for reporting.
-func (e SourceEntry) Label() string {
+func (e Entry) Label() string {
 	kind := typeBinary
 	if e.Source {
 		kind = typeSource
@@ -43,9 +46,9 @@ func (e SourceEntry) Label() string {
 	return strings.Join(parts, " ")
 }
 
-// IsSourcesFile reports whether a path names a sources file rather than a
+// IsFile reports whether a path names a sources file rather than a
 // repository location.
-func IsSourcesFile(p string) bool {
+func IsFile(p string) bool {
 	switch strings.ToLower(path.Ext(p)) {
 	case ".list", ".sources":
 		return true
@@ -54,10 +57,10 @@ func IsSourcesFile(p string) bool {
 	}
 }
 
-// LoadSources reads a one-line-per-entry sources.list (.list) or a deb822
+// Load reads a one-line-per-entry sources.list (.list) or a deb822
 // .sources file and returns the entries it describes. fetch is used when input
 // is an http(s) URL.
-func LoadSources(input string, fetch func(string) ([]byte, error)) ([]SourceEntry, []string, error) {
+func Load(input string, fetch func(string) ([]byte, error)) ([]Entry, []string, error) {
 	var data []byte
 	var err error
 	if strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://") {
@@ -78,8 +81,8 @@ func LoadSources(input string, fetch func(string) ([]byte, error)) ([]SourceEntr
 // parseListSources reads the one-line format:
 //
 //	deb [arch=amd64 signed-by=...] https://example.com/apt bookworm main contrib
-func parseListSources(data []byte) ([]SourceEntry, []string, error) {
-	var entries []SourceEntry
+func parseListSources(data []byte) ([]Entry, []string, error) {
+	var entries []Entry
 	var warnings []string
 
 	for i, raw := range strings.Split(string(data), "\n") {
@@ -101,8 +104,8 @@ func parseListSources(data []byte) ([]SourceEntry, []string, error) {
 }
 
 // parseListLine parses a single sources.list line.
-func parseListLine(line string) (SourceEntry, error) {
-	var e SourceEntry
+func parseListLine(line string) (Entry, error) {
+	var e Entry
 
 	fields := strings.Fields(line)
 	if len(fields) == 0 {
@@ -156,13 +159,13 @@ func parseListLine(line string) (SourceEntry, error) {
 
 // parseDeb822Sources reads the deb822 .sources format, in which one stanza can
 // describe several suites and components at once.
-func parseDeb822Sources(data []byte) ([]SourceEntry, []string, error) {
+func parseDeb822Sources(data []byte) ([]Entry, []string, error) {
 	paras, err := aptdata.ParseParagraphs(data)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse .sources: %w", err)
 	}
 
-	var entries []SourceEntry
+	var entries []Entry
 	var warnings []string
 	for i, p := range paras {
 		if strings.EqualFold(strings.TrimSpace(p.Get("Enabled")), "no") {
@@ -190,7 +193,7 @@ func parseDeb822Sources(data []byte) ([]SourceEntry, []string, error) {
 			}
 			for _, uri := range uris {
 				for _, suite := range suites {
-					entries = append(entries, SourceEntry{
+					entries = append(entries, Entry{
 						URI: uri, Suite: suite, Components: components,
 						Arches: arches, Source: isSource,
 					})

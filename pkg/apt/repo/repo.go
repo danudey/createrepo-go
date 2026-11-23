@@ -110,6 +110,11 @@ type Options struct {
 	// not asked for progress passes.
 	Tracker *progress.Tracker
 
+	// MetadataCache holds indexes already downloaded, by path (see
+	// MetadataReport.Cache), so loading does not fetch them again. It is for
+	// a read-only Repo; one that publishes must not use it.
+	MetadataCache map[string][]byte
+
 	// now overrides the timestamp source (for tests); zero means time.Now.
 	now int64
 }
@@ -602,6 +607,9 @@ func (r *Repo) nowUnix() int64 {
 // packages they describe). It is only used for indexes and Release files, so
 // it refuses anything larger than any of those can reasonably be.
 func (r *Repo) getAll(ctx context.Context, relpath string) ([]byte, error) {
+	if data, ok := r.opt.MetadataCache[relpath]; ok {
+		return data, nil
+	}
 	rc, err := r.be.Get(ctx, relpath)
 	if err != nil {
 		return nil, err

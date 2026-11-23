@@ -217,9 +217,9 @@ func (r *Repo) generateMetadata(pkgs []*repodata.Package) (*metadataSet, error) 
 		typ  string
 		open []byte
 	}{
-		{"primary", repodata.WritePrimary(pkgs)},
-		{"filelists", repodata.WriteFilelists(pkgs)},
-		{"other", repodata.WriteOther(pkgs)},
+		{typePrimary, repodata.WritePrimary(pkgs)},
+		{typeFilelists, repodata.WriteFilelists(pkgs)},
+		{typeOther, repodata.WriteOther(pkgs)},
 	}
 
 	ms := &metadataSet{files: map[string][]byte{}}
@@ -276,7 +276,7 @@ func (r *Repo) generateMetadata(pkgs []*repodata.Package) (*metadataSet, error) 
 func DerivedFromPackages(typ string) bool {
 	base := strings.TrimSuffix(strings.TrimSuffix(typ, "_db"), "_zck")
 	switch base {
-	case "primary", "filelists", "other", "filelists-ext":
+	case typePrimary, typeFilelists, typeOther, "filelists-ext":
 		return true
 	}
 	return false
