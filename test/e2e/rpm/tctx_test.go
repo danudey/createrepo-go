@@ -71,24 +71,34 @@ func (c *tctx) list() cliResult      { return c.cli("list", c.repo) }
 func (c *tctx) verify() cliResult    { return c.cli("verify", c.repo) }
 func (c *tctx) verifyBad() cliResult { return c.cliErr("verify", c.repo) }
 
-// check runs the deep validator at the given level. --arch any avoids
-// filtering by the host architecture so both the noarch and x86_64 fixtures
-// are always checked.
+// verifyArgs maps a depth, as the removed check command named them, to
+// verify's flags: metadata alone, the default, or every package's content.
+func verifyArgs(level string) []string {
+	switch level {
+	case "metadata":
+		return []string{"--metadata-only"}
+	case "fetch":
+		return []string{"--checksums"}
+	}
+	return nil
+}
+
+// check runs verify at the given depth.
 func (c *tctx) check(level string) cliResult {
-	return c.cli("check", "--arch", "any", "--level", level, c.repo)
+	return c.cli(append([]string{"verify", c.repo}, verifyArgs(level)...)...)
 }
 
-// checkBad runs check at the given level expecting a non-zero exit.
+// checkBad runs verify at the given depth expecting a non-zero exit.
 func (c *tctx) checkBad(level string) cliResult {
-	return c.cliErr("check", "--arch", "any", "--level", level, c.repo)
+	return c.cliErr(append([]string{"verify", c.repo}, verifyArgs(level)...)...)
 }
 
-// checkOK asserts that check at the given level reports RESULT: OK.
+// checkOK asserts that verify at the given depth reports OK.
 func (c *tctx) checkOK(level string) {
 	c.t.Helper()
 	res := c.check(level)
-	if !strings.Contains(res.stdout, "RESULT: OK") {
-		c.t.Errorf("check --level %s did not report OK:\n%s", level, res.combined())
+	if !strings.Contains(res.stdout, "OK:") {
+		c.t.Errorf("verify %v did not report OK:\n%s", verifyArgs(level), res.combined())
 	}
 }
 

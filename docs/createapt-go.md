@@ -199,8 +199,7 @@ createapt-go rebuild <repo>            # reconcile an existing suite against upd
 createapt-go copy    <src> <dst>       # copy/mirror a repository to another location
 createapt-go create  <repo>            # initialize an empty suite (records config)
 createapt-go list    <repo>            # list packages
-createapt-go verify  <repo>            # check the published files match the indexes
-createapt-go check   <repo>            # deep-validate indexes + packages (levels)
+createapt-go verify  <repo|sources>    # check a suite end to end, as apt reads it
 ```
 
 Useful flags (global unless noted):
@@ -313,7 +312,6 @@ What the overall bar counts depends on the command:
 | `copy` | each object copied, as two passes — `download` then `upload` |
 | `rebuild --from-packages` | each package re-read from a remote repository (a local one is read in place, so there is nothing to show) |
 | `verify --checksums` | each file hashed, and the bytes read to hash it |
-| `check --level fetch` | each package downloaded and verified |
 
 Notes:
 
@@ -657,11 +655,45 @@ createapt-go add /srv/repo dist/*.deb
 
 ## Verifying a repository (`verify`)
 
-`verify` checks that every file the indexes reference is present with the size
-and checksum recorded, and that the repository's intra-repository dependencies
-are satisfied. It modifies nothing.
+`verify` checks a suite end to end, the way apt reads it, and reports every
+defect it finds in one pass. It modifies nothing. It runs against any backend:
+local disk, SSH/SFTP, S3, GCS or HTTP(S).
 
-It first checks the suite's `Release` signature, in the same way `copy` checks a
+1. **Release.** `InRelease` (or `Release`) is present, parses, lists index
+   files, and has not passed its `Valid-Until`, which apt refuses even when
+   every file is intact.
+2. **Indexes.** Every file the Release lists is present with the recorded size
+   and every recorded checksum, decompresses, and (Packages, Sources) parses.
+   The Release may list several compressed forms of one index, and apt fetches
+   only one, so a form may be absent as long as another is sound. Debian's own
+   archive lists an uncompressed `Packages` it does not publish. With
+   `Acquire-By-Hash: yes`, the by-hash copy apt actually fetches must be
+   present.
+3. **Signature.** See below.
+4. **Packages.** Every file the indexes reference is present with the size and
+   checksum recorded. Each `.deb`'s control file must name the package, version
+   and architecture its index entry does, because apt installs what the archive
+   says. Only the first few kilobytes of each archive are read, unless it is
+   downloaded anyway. `--skip-package-contents` turns this off.
+5. **Dependencies.** Every `Depends`/`Pre-Depends` the repository could satisfy
+   from its own packages must be met by an available version. A dependency on a
+   name no package in the repository provides (`libc6`, `dpkg`) is left to the
+   installing system. This catches a prune that dropped a version another
+   package still needs.
+
+Indexes too broken to load are reported as problems, like anything else. The
+packages are then not checked.
+
+The package check catches a repository where a published file has diverged
+from its index, for example one `.deb` published over another without
+regenerating the metadata. Users see that as:
+
+```
+Failed to fetch .../pool/main/h/hello/hello_2.10-3_amd64.deb
+  Hash Sum mismatch
+```
+
+It also checks the suite's `Release` signature, in the same way `copy` checks a
 source: against `--keyring`, or else the key `createapt-go.json` records. Both
 `InRelease` and `Release.gpg` are verified when present. The text `InRelease`
 signs must be the `Release` file, because clients that fall back to `Release`
@@ -671,8 +703,10 @@ problem.
 
 ```sh
 createapt-go verify /srv/repo
-# OK: 42 package(s) present with the expected size (42 file(s)); checksums:
+# OK: dists/bookworm/InRelease and 6 index file(s) intact
+# packages: 42 package(s) present with the expected size (42 file(s)); checksums:
 # 42 verified from content; dependencies satisfied
+# contents: every .deb's control file matches its index entry
 ```
 
 How far the checksum check gets depends on what the backend can prove without
@@ -697,126 +731,44 @@ The summary always states which of the three applied, so an unproved checksum is
 never reported as though it had been verified, and a run with anything left
 unconfirmed says so and points at `--checksums`.
 
-```
---checksums          hash every file's content, downloading where necessary
---concurrency N      packages to check in parallel (default 6)
-```
-
 `verify` reports the estimated download volume before starting a `--checksums`
 run against a backend that cannot hash in place. Nothing is written to disk:
 each file is hashed as it streams past.
 
-For a deeper sweep that also validates the index files themselves and opens each
-package archive, use `check --level fetch` below.
-
-## Validating a repository (`check`)
-
-`verify` is the quick consistency check: it confirms every indexed package's
-file exists and, where the backend can hash remotely, that its checksum matches.
-`check` is the deeper validator. It reads the suite's `Release`, checks every
-index it covers against the size and checksums recorded there, parses those
-indexes, and confirms the packages they reference really exist with the size and
-checksum claimed.
-
-Both commands also validate the **dependency graph**: every `Depends`/
-`Pre-Depends` that the repository could satisfy from its own packages (some
-package provides the name) must be met by an available version. A dependency on
-a name no package in the repository provides — `libc6`, `dpkg` — is external and
-is left to the installing system. This catches a prune or removal that dropped a
-version another package still needs (for example `pinner` depending on
-`pinned (= 1.0-1)` after `pinned 1.0-1` was pruned). `rebuild` reports the same
-broken dependencies in its plan, and `--prune-older` will not drop a version
-that another package pins unless `--prune-break-deps` is given.
-
-`check` exists to catch repositories where a published package file has diverged
-from what was indexed — for example when one `.deb` is published over another
-without regenerating the metadata. End users see this as:
-
-```
-Failed to fetch .../pool/main/h/hello/hello_2.10-3_amd64.deb
-  Hash Sum mismatch
-```
-
-`check` runs against **any** backend — local disk, SSH/SFTP, S3, GCS, or
-HTTP(S) — so the same validation covers a repository at rest as well as one
-published live.
-
-### Levels
-
-Validation is layered; each `--level` includes everything the previous one does:
-
-| `--level`  | Checks |
-|------------|--------|
-| `metadata` | The suite's `InRelease`/`Release` is present and parseable (and not expired), and every index it references reads back with the correct size and checksums, decompresses, and parses. |
-| `head`     | …plus every package exists with the size the index claims (and, when the backend can checksum without transferring the file — S3, GCS, SFTP — the correct checksum). |
-| `fetch`    | …plus every package is downloaded and its size **and** checksum verified from its content, then its archive is opened and its control stanza parsed. |
-
-The default level is `head`.
-
-The archive check needs no tooling installed: the `ar` container and the
-compressed control tarball are walked in process, which exercises the same
-structure a client's `dpkg` would read.
-
-### Version selection
-
-`--versions` controls whether all versions of a package are checked or only the
-newest (`all` / `latest`). The default depends on the level: `latest` for
-`fetch` (so a full download stays cheap) and `all` for `metadata`/`head`.
-"Latest" uses the dpkg-faithful version comparison (including the `~` ordering
-and the letters-before-punctuation rule), so `dpkg` is **not** required to
-determine it.
-
 ### Input
 
-The positional argument (or `--sources-file`) may be a repository location — a
-local path, or a `file://`, `sftp://`, `s3://`, `gs://` or `http(s)://` URL — or
-a path/URL to a sources file (ending in `.list` or `.sources`), in which case
-every entry it names is checked as its own target. Both the one-line
-`sources.list` format and the deb822 `.sources` format are read, including their
-`[arch=…]`/`Architectures` options and `Enabled: no`.
+The argument is a repository location, or a sources file (a path or URL ending
+in `.list` or `.sources`). For a sources file, every entry it names is
+verified as its own suite. A `deb-src` entry for a suite a `deb` entry already
+names is covered by that entry. A sources file fetched over http(s) may only
+name http(s) repositories.
 
-With no `--suite`, a repository location is checked at the suite its
-`createapt-go.json` records, falling back to `stable`.
-
-### Examples
-
-```sh
-# HEAD-check every package in a live repository:
-createapt-go check https://deb.example.com/apt --suite bookworm
-
-# Check every entry a sources file names:
-createapt-go check /etc/apt/sources.list.d/example.sources
-
-# Fully download and verify a local repository:
-createapt-go check --level fetch /srv/repo
-
-# Checksum-verify just two packages on S3 without a full sweep:
-createapt-go check --level head --packages hello,libfoo s3://my-bucket/apt
-
-# Only validate that a GCS repository's indexes are internally consistent:
-createapt-go check --level metadata gs://my-bucket/apt
-```
+With no `--suite`, the suite `createapt-go.json` records is verified. Here
+`--suite` and `--component` take comma-separated lists, and several suites
+each report under a `[suite]` prefix.
 
 ### Flags
 
-| Flag | Default | Meaning |
-|------|---------|---------|
-| `--sources-file` | – | Path/URL to a `.list` or `.sources` file (alternative to the positional arg). |
-| `--level` | `head` | `metadata` \| `head` \| `fetch`. |
-| `--suite` | recorded, else `stable` | Comma-separated suites to check. |
-| `--component` | all | Comma-separated components to check. |
-| `--arch` | host arch | Comma-separated architectures (e.g. `amd64,arm64`). `any` checks every architecture in the indexes; name `source` to include source packages. |
-| `--packages` | all | Comma-separated package names to check. |
-| `--versions` | level-dependent | `latest` \| `all`. |
-| `--concurrency` | `6` | Parallel package checks. |
-| `--timeout` | `60s` | Per-operation timeout (`0` to disable). |
-| `--verbose` | `false` | Print a line for every check, not just issues. |
+```
+--checksums                hash every file's content, downloading where necessary
+--concurrency N            packages to check in parallel (default 6)
+--suite a,b                suites to verify (default: the recorded one)
+--component a,b            only these components (default: every one)
+--arch a,b                 only these architectures ("all" packages count as every
+                           one; "source" selects source packages)
+--packages a,b             only these package names
+--versions all|latest      every version (default), or only the newest
+--metadata-only            check the Release, indexes, signature and dependencies,
+                           not the package files
+--skip-package-contents    do not open the .deb files
+--timeout D                give up on a backend operation that makes no progress for
+                           D (default 60s; 0 disables)
+-v, --verbose              a line for every index file and package checked
+```
 
-### Exit codes
+`verify` exits 0 when every check passes, and non-zero after printing every
+problem when anything fails.
 
-`check` exits `0` when all checks pass, and non-zero when at least one check
-fails (the failure details are printed first). Other commands exit non-zero on
-any error.
 
 ## Library and testing
 

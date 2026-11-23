@@ -2,13 +2,20 @@ package repo
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
 	"path"
+	"slices"
 	"sync"
 
 	"github.com/danudey/createrepo-go/internal/parallel"
 	"github.com/danudey/createrepo-go/pkg/integrity"
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
+	"github.com/danudey/createrepo-go/pkg/apt/debmeta"
 	"github.com/danudey/createrepo-go/pkg/backend"
 	"github.com/danudey/createrepo-go/pkg/progress"
 )
@@ -47,6 +54,24 @@ type VerifyOptions struct {
 
 	// SkipDependencies omits the intra-repository dependency check.
 	SkipDependencies bool
+
+	// SkipPackages checks the dependency graph alone, no published file.
+	SkipPackages bool
+	// SkipPackageContents does not open the .deb files. Verify otherwise
+	// reads each one's control file (a few kilobytes at the start of the
+	// archive, or as the file streams past when it is downloaded anyway) and
+	// checks it names the package, version and architecture the index does.
+	SkipPackageContents bool
+
+	// Names, Arches and Components, when set, limit the entries checked;
+	// an Architecture: all package counts as every architecture except
+	// "source", which selects source packages. LatestOnly checks only the
+	// newest version of each name and architecture. The dependency check
+	// always covers the whole suite.
+	Names      []string
+	Arches     []string
+	Components []string
+	LatestOnly bool
 
 	// Progress, if set, is called once per entry as its check finishes. It may
 	// be called from several goroutines at once.
@@ -89,11 +114,11 @@ func (r *VerifyResult) OK() bool { return len(r.Problems) == 0 }
 // prove their checksums from content, and how many bytes that is according to
 // the indexes. It lets a caller warn before starting a long download. It is
 // zero when the backend can hash content on its own.
-func (r *Repo) DownloadEstimate() (files int, bytes int64) {
+func (r *Repo) DownloadEstimate(opt VerifyOptions) (files int, bytes int64) {
 	if backend.HashesContent(r.be) {
 		return 0, 0
 	}
-	for _, e := range r.idx.Entries() {
+	for _, e := range r.Selected(opt) {
 		files += len(e.Locations())
 		bytes += e.TotalBytes()
 	}
@@ -104,8 +129,18 @@ func (r *Repo) DownloadEstimate() (files int, bytes int64) {
 // with the size and checksum they claim, and that the repository's
 // intra-repository dependencies are satisfied. It never modifies anything.
 func (r *Repo) Verify(ctx context.Context, opt VerifyOptions) (*VerifyResult, error) {
-	entries := r.idx.Entries()
-	res := &VerifyResult{Packages: r.idx.Len(), Sources: r.idx.SourceLen()}
+	entries := r.Selected(opt)
+	res := &VerifyResult{}
+	for _, e := range entries {
+		if e.Arch() == aptdata.ArchSource {
+			res.Sources++
+		} else {
+			res.Packages++
+		}
+	}
+	if opt.SkipPackages {
+		entries = nil
+	}
 
 	// The bar measures bytes only when the files have to be read; otherwise
 	// each entry is a cheap call and the item count is the whole story.
@@ -157,6 +192,9 @@ type entryVerdict struct {
 	tally    integrity.Tally
 }
 
+// KindPackage is the Problem kind for a defect in a published package file.
+const KindPackage = "package"
+
 // aptWording names a verify finding in createapt-go's terms.
 var aptWording = integrity.Wording{
 	Records: "the index",
@@ -169,19 +207,137 @@ var aptWording = integrity.Wording{
 // against the size and checksum the Sources index records for it.
 func (r *Repo) verifyEntry(ctx context.Context, e aptdata.Entry, opt VerifyOptions) entryVerdict {
 	var v entryVerdict
+	pkg, isBinary := e.(*aptdata.Package)
 	for _, f := range entryFiles(e) {
 		v.files++
 		task := opt.Tracker.Item(path.Base(f.location), f.size)
-		details, tally := integrity.Check(ctx, r.be,
-			integrity.File{Location: f.location, Size: f.size, SHA256: f.sha256},
-			opt.Checksums, aptWording, func() *progress.Item { return task })
+		var control *aptdata.Paragraph
+		var controlErr error
+		var inspect func(io.Reader) error
+		if isBinary && !opt.SkipPackageContents {
+			inspect = func(rd io.Reader) error {
+				control, controlErr = debmeta.ControlFromReader(rd)
+				return nil
+			}
+		}
+		details, tally, streamed := integrity.CheckInspect(ctx, r.be,
+			integrity.File{Location: f.location, Size: f.size, Checksum: f.sha256},
+			opt.Checksums, aptWording, func() *progress.Item { return task }, inspect)
 		task.Done()
 		v.tally.Add(tally)
 		for _, d := range details {
-			v.problems = append(v.problems, Problem{Kind: "package", Subject: e.ID3(), Location: f.location, Detail: d})
+			v.problems = append(v.problems, Problem{Kind: KindPackage, Subject: e.ID3(), Location: f.location, Detail: d})
+		}
+		if inspect == nil {
+			continue
+		}
+		if !streamed {
+			if err := r.readControl(ctx, f.location, inspect); err != nil {
+				if !errors.Is(err, backend.ErrNotExist) {
+					v.problems = append(v.problems, Problem{Kind: KindPackage, Subject: e.ID3(), Location: f.location, Detail: "reading the .deb to check its control file: " + err.Error()})
+				}
+				continue
+			}
+		}
+		for _, d := range controlProblems(pkg, control, controlErr) {
+			v.problems = append(v.problems, Problem{Kind: KindPackage, Subject: e.ID3(), Location: f.location, Detail: d})
 		}
 	}
 	return v
+}
+
+// readControl reads the start of the .deb at location into inspect: in place
+// when it is a local file, and otherwise as much of a download as the
+// control file takes, which is a few kilobytes.
+func (r *Repo) readControl(ctx context.Context, location string, inspect func(io.Reader) error) error {
+	var rc io.ReadCloser
+	if lp, ok := backend.LocalPath(r.be, location); ok {
+		f, err := os.Open(lp)
+		if errors.Is(err, fs.ErrNotExist) {
+			return backend.ErrNotExist
+		}
+		if err != nil {
+			return err
+		}
+		rc = f
+	} else {
+		var err error
+		if rc, err = r.be.Get(ctx, location); err != nil {
+			return err
+		}
+	}
+	defer rc.Close()
+	return inspect(rc)
+}
+
+// controlProblems compares a .deb's control file with its index entry: apt
+// installs what the archive says, so an archive that is not the package the
+// index describes is a different package under that name.
+func controlProblems(p *aptdata.Package, control *aptdata.Paragraph, err error) []string {
+	if err != nil {
+		return []string{"it is not a readable Debian package: " + err.Error()}
+	}
+	var out []string
+	for _, field := range []string{aptdata.FieldPackage, aptdata.FieldVersion, aptdata.FieldArchitecture} {
+		want, got := p.Get(field), control.Get(field)
+		if field == aptdata.FieldVersion {
+			if aptdata.CompareVersions(want, got) == 0 {
+				continue
+			}
+		} else if want == got {
+			continue
+		}
+		out = append(out, fmt.Sprintf("its control file says %s: %s, but the index says %s", field, got, want))
+	}
+	return out
+}
+
+// Selected returns the entries opt selects for checking (see VerifyOptions).
+// An Architecture: all package appears in every architecture's index, so each
+// entry is listed once.
+func (r *Repo) Selected(opt VerifyOptions) []aptdata.Entry {
+	var out []aptdata.Entry
+	for _, e := range r.idx.Entries() {
+		if len(opt.Names) > 0 && !slices.Contains(opt.Names, e.Name()) {
+			continue
+		}
+		if !wantsArch(opt.Arches, e.Arch()) {
+			continue
+		}
+		if c, ok := e.(interface{ ComponentName() string }); ok && !wanted(opt.Components, c.ComponentName()) {
+			continue
+		}
+		out = append(out, e)
+	}
+	if !opt.LatestOnly {
+		return out
+	}
+	best := map[string]aptdata.Entry{}
+	for _, e := range out {
+		if cur, ok := best[e.Key()]; !ok || cur.ParsedVersion().Compare(e.ParsedVersion()) < 0 {
+			best[e.Key()] = e
+		}
+	}
+	latest := out[:0]
+	for _, e := range out {
+		if best[e.Key()] == e {
+			latest = append(latest, e)
+		}
+	}
+	return latest
+}
+
+func wantsArch(arches []string, arch string) bool {
+	if len(arches) == 0 {
+		return true
+	}
+	for _, a := range arches {
+		// An Architecture: all package installs on every real architecture.
+		if a == arch || (arch == aptdata.ArchAll && a != aptdata.ArchSource) {
+			return true
+		}
+	}
+	return false
 }
 
 // verifiableFile is one published file with what the indexes say about it.

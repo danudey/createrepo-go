@@ -198,14 +198,14 @@ func TestVerifyRepoFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify a good .repo file: %v\n%s", err, out)
 	}
-	for _, want := range []string{"[disabled] skipped", "[example] verifying file://" + root + "/9/x86_64", "repo_gpgcheck=1", "[example] trusted keys: file://" + full} {
+	for _, want := range []string{"[disabled] skipped", "[example releasever=9 arch=x86_64] verifying file://" + root + "/9/x86_64", "repo_gpgcheck=1", "[example releasever=9 arch=x86_64] trusted keys: file://" + full} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
 	}
 
 	out, err = runCLI(t, "verify", repoFile("0", stale), "--releasever", "9", "--var", "basearch=x86_64")
-	if err == nil || !strings.Contains(out, "[example] PROBLEM:") {
+	if err == nil || !strings.Contains(out, "[example releasever=9] PROBLEM:") {
 		t.Errorf("repo_gpgcheck=1 with a key missing the signing subkey: %v\n%s", err, out)
 	}
 

@@ -10,7 +10,6 @@ import (
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
 	"github.com/danudey/createrepo-go/pkg/apt/repo"
-	"github.com/danudey/createrepo-go/pkg/apt/repoconfig"
 	"github.com/danudey/createrepo-go/pkg/progress"
 )
 
@@ -122,124 +121,6 @@ func listCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&showSources, "sources", false, "list source packages even when there are none (no-op; sources are always listed when present)")
 	_ = cmd.Flags().MarkHidden("sources")
 	return cmd
-}
-
-func verifyCmd() *cobra.Command {
-	var checksums bool
-	var concurrency int
-	cmd := &cobra.Command{
-		Use:   "verify <repo-url>",
-		Short: "Check that the published files match the indexes",
-		Long: `Check that every file the suite's indexes reference is present with the size
-and checksum they record, and that the repository's intra-repository
-dependencies are satisfied. Nothing is modified.
-
-The Release signature is checked first, against --keyring or the key the
-repository's config records: InRelease and Release.gpg are both verified when
-present, and InRelease must sign the same text as Release. With no key, a
-missing or unverifiable signature is a warning; --verify-sigs makes it a
-problem.
-
-How far the checksum check goes depends on the backend:
-
-  local disk, SSH/SFTP  the checksum is computed from the stored file (over SSH
-                        with sha256sum, so the package never crosses the
-                        network), so contents are always proved.
-  S3, GCS               the object store reports the checksum recorded when the
-                        object was uploaded. That catches indexes and objects
-                        disagreeing, but not an object whose content changed
-                        afterwards.
-  HTTP(S)               no checksum is available without downloading.
-
-Pass --checksums to prove every file's checksum from its content regardless,
-downloading each one the backend cannot hash in place. The summary always says
-which of the three applied, so an unproved checksum is never reported as though
-it had been verified.`,
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			r, err := openRepoForRead(cmd, args[0])
-			if err != nil {
-				return err
-			}
-			defer r.Close()
-
-			// The Release signature is what makes the rest trustworthy, so
-			// it is checked first. A bad one is reported with the other
-			// problems rather than stopping the run, so one pass shows
-			// everything that is wrong.
-			cfg, err := repoconfig.Load(cli.Ctx(cmd), r.Backend())
-			if err != nil {
-				return err
-			}
-			keyrings, releaseKeys := verificationKeyrings(cmd, cfg)
-			defer releaseKeys()
-			_, sigErr := verifyReleaseSignature(cmd, r, keyrings, "the")
-
-			out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
-			mode := repo.ChecksumCheap
-			if checksums {
-				mode = repo.ChecksumContent
-				// A full content check can be a large transfer; say so before
-				// starting rather than appearing to hang.
-				if n, size := r.DownloadEstimate(); n > 0 {
-					fmt.Fprintf(out, "hashing %d file(s) from %s: ~%s to download\n", n, r.Backend(), progress.Bytes(size))
-				}
-			}
-
-			res, err := r.Verify(cli.Ctx(cmd), repo.VerifyOptions{
-				Checksums: mode, Concurrency: concurrency, Tracker: prog,
-			})
-			if err != nil {
-				return err
-			}
-			problems := len(res.Problems)
-			if sigErr != nil {
-				fmt.Fprintln(errOut, "PROBLEM: release signature:", sigErr)
-				problems++
-			}
-			for _, p := range res.Problems {
-				fmt.Fprintln(errOut, "PROBLEM:", p)
-			}
-			if problems > 0 {
-				return fmt.Errorf("%d problem(s) found", problems)
-			}
-			fmt.Fprintln(out, verifySummary(res))
-			return nil
-		},
-	}
-	cmd.Flags().BoolVar(&checksums, "checksums", false, "prove every file's checksum from its content, downloading each one the backend cannot hash in place")
-	cmd.Flags().IntVar(&concurrency, "concurrency", 6, "number of packages to check in parallel")
-	return cmd
-}
-
-// verifySummary renders a clean verification result, stating exactly how each
-// file's checksum was established so the reader is never left assuming more was
-// proved than actually was.
-func verifySummary(res *repo.VerifyResult) string {
-	var parts []string
-	if res.ChecksumVerified > 0 {
-		parts = append(parts, fmt.Sprintf("%d verified from content", res.ChecksumVerified))
-	}
-	if res.ChecksumRecorded > 0 {
-		parts = append(parts, fmt.Sprintf("%d matched the store's recorded checksum", res.ChecksumRecorded))
-	}
-	if res.ChecksumUnconfirmed > 0 {
-		parts = append(parts, fmt.Sprintf("%d not confirmed", res.ChecksumUnconfirmed))
-	}
-
-	subject := fmt.Sprintf("%d package(s)", res.Packages)
-	if res.Sources > 0 {
-		subject += fmt.Sprintf(" and %d source package(s)", res.Sources)
-	}
-	summary := fmt.Sprintf("OK: %s present with the expected size (%d file(s))", subject, res.Files)
-	if len(parts) > 0 {
-		summary += "; checksums: " + strings.Join(parts, ", ")
-	}
-	summary += "; dependencies satisfied"
-	if res.ChecksumUnconfirmed > 0 {
-		summary += "\nRun with --checksums to download and hash the files whose checksum this backend cannot confirm."
-	}
-	return summary
 }
 
 // printPlan renders a commit Plan to the command's output.

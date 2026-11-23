@@ -14,10 +14,9 @@ func main() {
 	err := rootCmd().ExecuteContext(ctx)
 	stop()
 	if err != nil {
-		// A reported check failure, or a takeover the analysis found unsafe,
-		// has already printed its details; exit non-zero without an extra
-		// "error:" line.
-		if !errors.Is(err, errCheckFailed) && !errors.Is(err, errTakeoverBlocked) {
+		// A takeover the analysis found unsafe has already printed its
+		// details; exit non-zero without an extra "error:" line.
+		if !errors.Is(err, errTakeoverBlocked) {
 			fmt.Fprintln(os.Stderr, "error:", err)
 		}
 		os.Exit(1)

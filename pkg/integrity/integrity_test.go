@@ -3,6 +3,7 @@ package integrity
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"io"
 	"os"
@@ -67,14 +68,20 @@ func TestCheck(t *testing.T) {
 		problem string
 		want    Tally
 	}{
-		{"verified in place", be, File{"a.deb", 5, sum("hello")}, Cheap, "", Tally{Verified: 1}},
-		{"missing", be, File{"b.deb", 5, sum("x")}, Cheap, "missing", Tally{}},
-		{"wrong size", be, File{"a.deb", 6, sum("hello")}, Cheap, "size 5 does not match the 6 the index records", Tally{Verified: 1}},
-		{"wrong content", be, File{"a.deb", 5, sum("other")}, Cheap, "content checksum", Tally{}},
-		{"no checksum recorded", be, File{"a.deb", 5, ""}, Content, "", Tally{Unconfirmed: 1}},
-		{"cheap mode cannot hash", blind{be}, File{"a.deb", 5, sum("hello")}, Cheap, "", Tally{Unconfirmed: 1}},
-		{"content mode downloads", blind{be}, File{"a.deb", 5, sum("hello")}, Content, "", Tally{Verified: 1, Downloaded: 1, BytesRead: 5}},
-		{"download finds a different file", blind{be}, File{"a.deb", 5, sum("other")}, Content, "content checksum", Tally{Downloaded: 1, BytesRead: 5}},
+		{"verified in place", be, File{"a.deb", 5, sum("hello"), ""}, Cheap, "", Tally{Verified: 1}},
+		{"missing", be, File{"b.deb", 5, sum("x"), ""}, Cheap, "missing", Tally{}},
+		{"wrong size", be, File{"a.deb", 6, sum("hello"), ""}, Cheap, "size 5 does not match the 6 the index records", Tally{Verified: 1}},
+		{"wrong content", be, File{"a.deb", 5, sum("other"), ""}, Cheap, "content checksum", Tally{}},
+		{"no checksum recorded", be, File{"a.deb", 5, "", ""}, Content, "", Tally{Unconfirmed: 1}},
+		{"cheap mode cannot hash", blind{be}, File{"a.deb", 5, sum("hello"), ""}, Cheap, "", Tally{Unconfirmed: 1}},
+		{"content mode downloads", blind{be}, File{"a.deb", 5, sum("hello"), ""}, Content, "", Tally{Verified: 1, Downloaded: 1, BytesRead: 5}},
+		{"download finds a different file", blind{be}, File{"a.deb", 5, sum("other"), ""}, Content, "content checksum", Tally{Downloaded: 1, BytesRead: 5}},
+		// A checksum type other than sha256 is proved by reading the file,
+		// even where the backend could hash sha256 in place.
+		{"sha512 read in content mode", be, File{"a.deb", 5, sha512Hex("hello"), "sha512"}, Content, "", Tally{Verified: 1, Downloaded: 1, BytesRead: 5}},
+		{"sha512 mismatch", be, File{"a.deb", 5, sha512Hex("other"), "sha512"}, Content, "content checksum", Tally{Downloaded: 1, BytesRead: 5}},
+		{"sha1 unconfirmed in cheap mode", be, File{"a.deb", 5, "00", "sha1"}, Cheap, "", Tally{Unconfirmed: 1}},
+		{"unknown checksum type", be, File{"a.deb", 5, "00", "crc32"}, Content, "unknown type", Tally{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			asked := false
@@ -91,4 +98,9 @@ func TestCheck(t *testing.T) {
 			}
 		})
 	}
+}
+
+func sha512Hex(s string) string {
+	h := sha512.Sum512([]byte(s))
+	return hex.EncodeToString(h[:])
 }

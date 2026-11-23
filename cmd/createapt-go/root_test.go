@@ -339,17 +339,3 @@ func testCommand() *cobra.Command {
 	}
 	return cmd
 }
-
-func TestHostArchUsesDebianNames(t *testing.T) {
-	// Whatever this machine is, the name must be one Debian uses — never a Go
-	// GOARCH spelling that no repository would have an index for.
-	got := hostArch()
-	for _, bad := range []string{"386", "ppc64le"} {
-		if got == bad {
-			t.Errorf("hostArch() = %q, which is a Go name, not a Debian one", got)
-		}
-	}
-	if got == "" {
-		t.Error("hostArch() returned an empty architecture")
-	}
-}

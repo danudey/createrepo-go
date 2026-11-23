@@ -12,6 +12,7 @@ import (
 	"bufio"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -184,6 +185,18 @@ func (e *MissingVarsError) Error() string {
 		return fmt.Sprintf("%q uses %s, which has no value", e.In, e.Names[0])
 	}
 	return fmt.Sprintf("%q uses %s, which have no values", e.In, strings.Join(e.Names, ", "))
+}
+
+// Vars returns the names of the variables s uses in its baseurl, mirrorlist
+// and gpgkey entries.
+func (s Section) Vars() map[string]bool {
+	used := map[string]bool{}
+	for _, v := range append(append(slices.Clone(s.BaseURLs), s.GPGKeys...), s.MirrorList) {
+		for _, m := range varPattern.FindAllStringSubmatch(v, -1) {
+			used[m[1]+m[2]] = true
+		}
+	}
+	return used
 }
 
 // Expand returns s with vars substituted into its baseurl, mirrorlist and

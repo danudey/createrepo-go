@@ -10,7 +10,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"path"
@@ -134,6 +136,27 @@ func ReadAll(ctx context.Context, be backend.Backend, relpath string) ([]byte, e
 	return io.ReadAll(rc)
 }
 
+// ErrTooLarge is returned by ReadAllLimit for an object over its limit.
+var ErrTooLarge = errors.New("object is larger than allowed")
+
+// ReadAllLimit is ReadAll that refuses an object over limit bytes, so a
+// repository cannot make a reader buffer whatever it claims.
+func ReadAllLimit(ctx context.Context, be backend.Backend, relpath string, limit int64) ([]byte, error) {
+	rc, err := be.Get(ctx, relpath)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(io.LimitReader(rc, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s: %w (over %d bytes)", relpath, ErrTooLarge, limit)
+	}
+	return data, nil
+}
+
 // HashObject streams relpath through sha256, returning the hex digest and the
 // number of bytes read. Nothing is buffered: a package of any size costs one
 // pass and no disk.
@@ -146,12 +169,17 @@ func HashObject(ctx context.Context, be backend.Backend, relpath string, item *p
 // transfer, not two. inspect may stop reading early; the rest is still hashed.
 // A nil inspect is HashObject.
 func HashObjectWith(ctx context.Context, be backend.Backend, relpath string, item *progress.Item, inspect func(io.Reader) error) (string, int64, error) {
+	return HashObjectInto(ctx, be, relpath, sha256.New(), item, inspect)
+}
+
+// HashObjectInto is HashObjectWith with the hash to compute supplied, for a
+// checksum type other than sha256.
+func HashObjectInto(ctx context.Context, be backend.Backend, relpath string, h hash.Hash, item *progress.Item, inspect func(io.Reader) error) (string, int64, error) {
 	rc, err := be.Get(ctx, relpath)
 	if err != nil {
 		return "", 0, err
 	}
 	defer rc.Close()
-	h := sha256.New()
 	cw := &countWriter{w: item.Writer(h)}
 	src := io.TeeReader(rc, cw)
 	if inspect != nil {

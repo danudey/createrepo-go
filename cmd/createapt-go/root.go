@@ -199,7 +199,7 @@ packages are never downloaded.`,
 	pf.BoolVar(&gf.gpgNoPrompt, "gpg-no-prompt", cli.EnvBool("CREATEAPT_GPG_NO_PROMPT"), "never let gpg ask for a key passphrase; fail instead of prompting (or set CREATEAPT_GPG_NO_PROMPT=1). Use this in CI, where a prompt hangs the job")
 	pf.StringArrayVar(&gf.keyrings, "keyring", nil, "public keyring file to verify a repository's Release against (repeatable)")
 
-	root.AddCommand(addCmd(), removeCmd(), rebuildCmd(), copyCmd(), createCmd(), listCmd(), verifyCmd(), checkCmd())
+	root.AddCommand(addCmd(), removeCmd(), rebuildCmd(), copyCmd(), createCmd(), listCmd(), verifyCmd())
 	return root
 }
 

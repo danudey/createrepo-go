@@ -82,7 +82,7 @@ func TestBackendsPublishAndVerify(t *testing.T) {
 			}
 
 			be.run(t, "verify", be.Location)
-			be.run(t, "check", "--level", "fetch", "--arch", "any", "--versions", "all", be.Location)
+			be.run(t, "verify", "--checksums", be.Location)
 
 			listing := be.run(t, "list", be.Location)
 			if !strings.Contains(listing, "2 package(s)") {

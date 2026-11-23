@@ -70,6 +70,10 @@ type VerifyOptions struct {
 	// SkipDependencies omits the intra-repository dependency check.
 	SkipDependencies bool
 
+	// SkipPackages checks the metadata alone: repomd.xml's signature and the
+	// dependency graph, but no package file at all.
+	SkipPackages bool
+
 	// SkipPackageContents omits reading the packages themselves: their
 	// digests and signatures go unchecked, and so do the signature rules
 	// below. Verify otherwise reads every package's header, and its payload
@@ -122,6 +126,14 @@ type VerifyOptions struct {
 	// RequireSignedMetadata makes repomd.xml have to carry a detached
 	// signature.
 	RequireSignedMetadata bool
+
+	// Names and Arches, when set, limit the packages checked to those names
+	// and architectures; noarch counts as every architecture. LatestOnly
+	// checks only the newest version of each name and architecture. The
+	// dependency check always covers the whole repository.
+	Names      []string
+	Arches     []string
+	LatestOnly bool
 
 	// Progress, if set, is called once per package as its check finishes. It
 	// may be called from several goroutines at once.
@@ -179,15 +191,67 @@ func (r *VerifyResult) OK() bool { return len(r.Problems) == 0 }
 // prove their checksums from content, and how many bytes that is according to
 // the metadata. It lets a caller warn before starting a long download. It is
 // zero when the backend can hash content on its own.
-func (r *Repo) DownloadEstimate() (packages int, bytes int64) {
-	if backend.HashesContent(r.be) {
-		return 0, 0
-	}
-	for _, p := range r.idx.Packages() {
+func (r *Repo) DownloadEstimate(opt VerifyOptions) (packages int, bytes int64) {
+	inPlace := backend.HashesContent(r.be)
+	for _, p := range r.Selected(opt) {
+		// Only sha256 can be hashed in place; any other pkgid type is read.
+		if inPlace && integrity.IsSHA256(p.ChecksumType) {
+			continue
+		}
 		packages++
 		bytes += p.SizePackage
 	}
 	return packages, bytes
+}
+
+// Selected returns the packages opt selects for checking: those of opt.Names
+// and opt.Arches (noarch always counts as one of them), and with
+// opt.LatestOnly only the newest version of each name and architecture.
+func (r *Repo) Selected(opt VerifyOptions) []*repodata.Package {
+	names, arches := toSet(opt.Names), toSet(opt.Arches)
+	var out []*repodata.Package
+	for _, p := range r.idx.Packages() {
+		if len(names) > 0 && !names[p.Name] {
+			continue
+		}
+		if len(arches) > 0 && !arches[p.Arch] && p.Arch != "noarch" {
+			continue
+		}
+		out = append(out, p)
+	}
+	if !opt.LatestOnly {
+		return out
+	}
+	type key struct{ name, arch string }
+	best := map[key]*repodata.Package{}
+	var order []key
+	for _, p := range out {
+		k := key{p.Name, p.Arch}
+		cur, ok := best[k]
+		switch {
+		case !ok:
+			best[k] = p
+			order = append(order, k)
+		case repodata.CompareEVR(p.Epoch, p.Version, p.Release, cur.Epoch, cur.Version, cur.Release) > 0:
+			best[k] = p
+		}
+	}
+	latest := make([]*repodata.Package, 0, len(order))
+	for _, k := range order {
+		latest = append(latest, best[k])
+	}
+	return latest
+}
+
+func toSet(items []string) map[string]bool {
+	if len(items) == 0 {
+		return nil
+	}
+	m := make(map[string]bool, len(items))
+	for _, it := range items {
+		m[it] = true
+	}
+	return m
 }
 
 // checkedPackage is one package and what reading it found.
@@ -202,13 +266,16 @@ type checkedPackage struct {
 // as opt requires, and that the repository's intra-repository dependencies
 // are satisfied. It never modifies anything.
 func (r *Repo) Verify(ctx context.Context, opt VerifyOptions) (*VerifyResult, error) {
-	pkgs := r.idx.Packages()
+	pkgs := r.Selected(opt)
 	res := &VerifyResult{Packages: len(pkgs), Signers: map[string]int{}, Trusted: map[string]bool{}}
+	if opt.SkipPackages {
+		pkgs, opt.SkipPackageContents = nil, true
+	}
 
 	// Only a content check against a backend that cannot hash for us moves any
 	// data, and that is exactly what DownloadEstimate measures.
 	if opt.Checksums == ChecksumContent {
-		if n, bytes := r.DownloadEstimate(); n > 0 {
+		if n, bytes := r.DownloadEstimate(opt); n > 0 {
 			r.opt.Tracker.Begin("download", n, bytes)
 			defer r.opt.Tracker.End()
 		}
@@ -276,7 +343,7 @@ var rpmWording = integrity.Wording{
 // whole file where it is local or being downloaded for its checksum anyway,
 // and otherwise just the header, which is where the signatures are.
 func (r *Repo) verifyPackage(ctx context.Context, p *repodata.Package, opt VerifyOptions) ([]Problem, integrity.Tally, *pkgcheck.Result) {
-	f := integrity.File{Location: p.Location, Size: p.SizePackage, SHA256: sha256Only(p.PkgID, p.ChecksumType)}
+	f := integrity.File{Location: p.Location, Size: p.SizePackage, Checksum: p.PkgID, Algo: p.ChecksumType}
 	check := pkgcheck.Options{Keyring: opt.Keyring, Policy: opt.Policy}
 
 	var inspected *pkgcheck.Result

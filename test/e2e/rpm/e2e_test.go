@@ -113,14 +113,14 @@ func TestE2EReadOnlyHTTP(t *testing.T) {
 		t.Errorf("verify over http failed: %v\n%s", verRes.err, verRes.combined())
 	}
 
-	// check must fully validate the repository over HTTP, including a fetch-level
+	// verify must fully validate the repository over HTTP, including a
 	// download of every package.
-	checkRes := runCLI(t, nil, "check", "--arch", "any", "--level", "fetch", httpURL)
+	checkRes := runCLI(t, nil, "verify", "--checksums", httpURL)
 	if checkRes.err != nil {
-		t.Errorf("check over http failed: %v\n%s", checkRes.err, checkRes.combined())
+		t.Errorf("verify over http failed: %v\n%s", checkRes.err, checkRes.combined())
 	}
-	if !strings.Contains(checkRes.stdout, "RESULT: OK") {
-		t.Errorf("check over http did not report OK:\n%s", checkRes.combined())
+	if !strings.Contains(checkRes.stdout, "OK:") {
+		t.Errorf("verify over http did not report OK:\n%s", checkRes.combined())
 	}
 
 	// Writes must be rejected on the read-only backend.

@@ -641,7 +641,7 @@ var scenarios = []scenario{
 			}
 		}
 		c.cli("verify", dst)
-		c.cli("check", dst, "--level", "fetch", "--arch", "any")
+		c.cli("verify", dst, "--checksums")
 	}},
 
 	{name: "copy_existing_destination_needs_a_flag", run: func(c *tctx, r rpmSet) {

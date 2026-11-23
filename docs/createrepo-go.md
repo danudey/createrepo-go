@@ -111,8 +111,7 @@ createrepo-go copy    <src> <dst>       # copy/mirror a repository to another lo
 createrepo-go create  <repo>            # initialize an empty repository (records config)
 createrepo-go takeover <repo>           # report what managing an existing repo with this tool would change
 createrepo-go list    <repo>            # list packages
-createrepo-go verify  <repo|file.repo>  # check the published RPMs match the metadata
-createrepo-go check   <repo>            # deep-validate metadata + packages (levels)
+createrepo-go verify  <repo|file.repo>  # check a repository end to end, as dnf reads it
 ```
 
 Useful flags (global unless noted):
@@ -226,7 +225,7 @@ createrepo-go copy https://downloads.example.com/el9 s3://my-bucket/el9 --progre
 
 Each transfer in flight has a bar of its own, labelled with what is being done
 to it (`download`, `upload`, `sign`). Where several packages
-transfer at once — `verify --checksums` and `check --level fetch` run several in
+transfer at once — `verify --checksums` runs several in
 parallel — each one gets a bar. The bottom line is the operation as a whole:
 packages finished, bytes moved, the current rate, and the time left at that
 rate.
@@ -240,7 +239,6 @@ its metadata's:
 | `copy` | each object fetched from the source and written to the destination |
 | `rebuild --from-packages`, `--resign-packages` | the RPMs downloaded to re-read or re-sign |
 | `verify --checksums` | the RPMs downloaded to hash, where the backend cannot hash them in place |
-| `check --level fetch` | the packages downloaded to verify |
 
 Notes:
 
@@ -648,17 +646,45 @@ createrepo-go add /srv/repo dist/*.rpm
 
 ## Verifying a repository (`verify`)
 
-`verify` checks that every RPM the metadata references is present with the size
-and checksum the metadata records, that each RPM is intact and its signatures
-sound, that the packages and `repomd.xml` are signed as the repository requires,
-and that the repository's intra-repository dependencies are satisfied. It
-modifies nothing.
+`verify` checks a repository end to end, the way dnf reads it, and reports every
+defect it finds in one pass. It modifies nothing. It runs against any backend:
+local disk, SSH/SFTP, S3, GCS or HTTP(S). So the same check covers a repository
+at rest and one published live.
+
+1. **Metadata.** `repodata/repomd.xml` is present and parses, names a primary
+   document, and names no type twice. Every document it references (primary,
+   filelists, other, and also comps, updateinfo, modules and the sqlite
+   databases) is present with the recorded size and checksum, decompresses,
+   and has the recorded open size and open checksum. Primary, filelists and
+   other must also parse.
+2. **The metadata signature.** `repomd.xml.asc` is checked; see
+   [Signatures](#signatures).
+3. **Packages.** Every RPM the metadata references is present with the size
+   and checksum the metadata records, and is intact, with sound signatures.
+4. **Dependencies.** Every package requirement the repository could satisfy
+   from its own packages must be met by an available version. A requirement no
+   package in the repository provides (glibc, `/bin/sh`) is left to the
+   installing system. This catches a prune or removal that dropped a version
+   another package still needs.
+
+Metadata too broken to load is reported as problems, like anything else. The
+packages are then not checked, since there is no index to check them against.
+
+The package check catches a repository where a published package has diverged
+from what the metadata says, for example one RPM published over another
+without regenerating the metadata. Users see that as dnf errors like:
+
+```
+[MIRROR] calico-fluent-bit-4.0.13-1.el8.x86_64.rpm: Interrupted by header callback:
+  Server reports Content-Length: 13264076 but expected size is: 13262596
+```
 
 ```sh
 createrepo-go verify /srv/repo
-# OK: 42 package(s) present with the expected size; checksums: 42 verified from
+# OK: metadata: 3 document(s) intact (primary, filelists, other)
+# packages: 42 present with the expected size; checksums: 42 verified from
 # content; dependencies satisfied
-# packages: 42 intact (header and payload digests checked); signatures: 42 signed
+# contents: 42 intact (header and payload digests checked); signatures: 42 signed
 # by B29070C0BBA03456860DBA5C260B206AE739E175 (verified against a trusted key)
 # repomd.xml: signed by B29070C0BBA03456860DBA5C260B206AE739E175 (verified against a trusted key)
 ```
@@ -775,13 +801,35 @@ repository in the file the way a client using that file would:
   `$releasever_major` and `$releasever_minor`), `--arch` (sets both `$arch`
   and `$basearch`) and `--var name=value`. Any variable without a value is an
   error, reported before anything is fetched
+- `--releasever` and `--arch` take comma-separated lists. A section that uses
+  the variable is verified once per value, so one section describing EL8 and
+  EL9 repositories is verified as both
 
 ```sh
-createrepo-go verify ./example.repo --releasever 9 --arch x86_64
+createrepo-go verify ./example.repo --releasever 8,9 --arch x86_64,aarch64
 ```
 
-Each line of output is prefixed with the repository's `[id]`. The command
-fails if any repository fails.
+Each line of output is prefixed with the repository's `[id]` and the values
+used, such as `[calico releasever=9 arch=x86_64]`. The command fails if any
+repository fails.
+A `.repo` file fetched over http(s) may only point at http(s) repositories,
+not local paths or object-store URLs: its author chose those locations, not
+the person running verify.
+
+### Choosing what to check
+
+By default every package of every version and architecture is checked.
+
+```
+--metadata-only            check the metadata alone: every repodata document, the
+                           repomd.xml signature, and dependencies; no package files
+--packages a,b             only these package names
+--arch x86_64,aarch64      only these architectures (noarch always counts)
+--versions latest          only the newest version of each name and architecture
+```
+
+The dependency check always covers the whole repository, whatever is
+selected.
 
 ### Flags
 
@@ -791,125 +839,33 @@ fails if any repository fails.
 --keyring FILE             trusted public keys (repeatable)
 --keyring-url URL          trusted public keys fetched from a URL, as your users
                            fetch them (repeatable); signatures must verify
---releasever V, --arch A   values for a .repo file's $releasever and $arch/$basearch
+--releasever V,...         .repo $releasever values, one repository each
+--arch A,...               architectures to check; .repo $arch/$basearch values
 --var NAME=VALUE           value for any other .repo file variable (repeatable)
+--packages a,b             only these package names
+--versions all|latest      every version (default), or only the newest
+--metadata-only            check the metadata, not the package files
 --require-trusted          fail unless every signature verifies against a trusted key
 --require-signed-packages  fail unless every RPM is signed in a way the target accepts
 --require-signed-metadata  fail unless repomd.xml is signed
 --skip-package-contents    do not read the RPMs (no digest or signature checks)
+--timeout D                give up on a backend operation that makes no progress for
+                           D (default 60s; 0 disables); a download that keeps
+                           making progress is never cut off
+-v, --verbose              a line for every metadata document and package checked
 ```
 
-For a deeper sweep that also validates the metadata index files themselves,
-use `check --level fetch` below.
+### Requirements
 
-## Validating a repository (`check`)
-
-`verify` is the quick consistency check: it confirms every indexed package's
-RPM exists (and, where the backend can hash remotely, that its checksum matches
-the pkgid). `check` is the deeper validator — a faithful, backend-agnostic port
-of the standalone `dnf-repocheck` tool. It reads the repository metadata, parses
-the package index, and confirms the metadata is internally consistent and that
-the packages it references really exist with the size and checksum the metadata
-claims.
-
-Both commands also validate the **dependency graph**: every package requirement
-that the repository could satisfy from its own packages (some package provides
-the capability) must be met by an available version. A requirement whose
-capability no package in the repository provides — glibc, `/bin/sh`, `rpmlib(...)`
-— is an external dependency and is left to the installing system. This catches a
-prune or removal that dropped a version another package still needs (for example
-`app` requiring `deplib = 1.0` after `deplib-1.0` was pruned). `rebuild` reports
-the same broken dependencies in its plan, and `--prune-older` will not drop a
-version that another package pins unless `--prune-break-deps` is given.
-
-It exists to catch repositories where a published package file has diverged
-from what `createrepo` indexed — for example when one RPM is published over
-another without regenerating the metadata. End users see this as dnf errors
-like:
-
-```
-[MIRROR] calico-fluent-bit-4.0.13-1.el8.x86_64.rpm: Interrupted by header callback:
-  Server reports Content-Length: 13264076 but expected size is: 13262596
-```
-
-Unlike `dnf-repocheck`, which only speaks HTTP, `check` runs against **any**
-backend — local disk, SSH/SFTP, S3, GCS, or HTTP(S) — so the same validation
-covers a repository at rest as well as one published live.
-
-### Levels
-
-Validation is layered; each `--level` includes everything the previous one does:
-
-| `--level`  | Checks |
-|------------|--------|
-| `metadata` | `repodata/repomd.xml` is present and parseable, and every index file it references (primary/filelists/other) reads back with the correct size, checksum, and decompressed (open) size/checksum. |
-| `head`     | …plus every package in the index exists with the size the metadata claims (and, when the backend can checksum without transferring the file — S3, GCS, SFTP — the correct checksum). |
-| `fetch`    | …plus every package is downloaded and its size **and** checksum verified, then — if the `rpm` command is available — `rpm --checksig --nosignature` verifies the package's internal header/payload digests. |
-
-The default level is `head`.
-
-### Version selection
-
-`--versions` controls whether all versions of a package are checked or only the
-newest (`all` / `latest`). The default depends on the level: `latest` for
-`fetch` (so a full download stays cheap) and `all` for `metadata`/`head`.
-"Latest" uses the shared librpm-faithful version comparison (including the `~`
-and `^` separators), so the `rpm` command is **not** required to determine it.
-
-### Input
-
-The positional argument (or `--repo-file`) may be a repository location — a
-local path, or a `file://`, `sftp://`, `s3://`, `gs://` or `http(s)://` URL — or
-a path/URL to a `.repo` file (ending in `.repo`). A `.repo` file's baseurl may
-contain `$releasever`/`$basearch` variables; supply the values to substitute
-with `--releasever` and `--arch`, and each combination is checked as its own
-target.
-
-### Examples
-
-```sh
-# HEAD-check every package in a live HTTP repo for RHEL 8 and 9 from a .repo file:
-createrepo-go check --releasever 8,9 \
-  https://downloads.tigera.io/ee/rpms/v3.22/calico_enterprise.repo
-
-# Fully download and checksum-verify a local repository:
-createrepo-go check --level fetch /srv/repo
-
-# Checksum-verify just two packages on S3 without a full sweep:
-createrepo-go check --level head --packages calico-fluent-bit,calico-node \
-  s3://my-bucket/el8
-
-# Only validate that a GCS repo's metadata is internally consistent:
-createrepo-go check --level metadata gs://my-bucket/el9
-```
-
-### Flags
-
-| Flag | Default | Meaning |
-|------|---------|---------|
-| `--repo-file` | – | Path/URL to a `.repo` file (alternative to the positional arg). |
-| `--level` | `head` | `metadata` \| `head` \| `fetch`. |
-| `--arch` | host arch | Comma-separated arches (e.g. `x86_64,aarch64`). `any` checks every arch in the metadata. |
-| `--releasever` | – | Comma-separated `$releasever` values (e.g. `8,9`) for a `.repo` baseurl. |
-| `--packages` | all | Comma-separated package names to check. |
-| `--versions` | level-dependent | `latest` \| `all`. |
-| `--concurrency` | `6` | Parallel package checks. |
-| `--timeout` | `60s` | Per-operation timeout (`0` to disable). |
-| `--verbose` | `false` | Print a line for every check, not just issues. |
-
-### The `rpm` command
-
-The deeper package digest verification at `--level fetch` shells out to `rpm`.
-If `rpm` is not installed the tool prints a warning naming the check it is
-skipping and continues — file size and checksum are still verified entirely in
-Go. Likewise, `xz`-compressed metadata requires the `xz` command (no pure-Go xz
-decoder is bundled); `zstd`, `gzip`, and `bzip2` metadata are handled natively.
+`verify` needs no `rpm` installation: package digests and signatures are
+checked in Go. `xz`-compressed metadata needs the `xz` command, because no
+pure-Go xz decoder is bundled. `zstd`, `gzip` and `bzip2` metadata are handled
+natively.
 
 ### Exit codes
 
-`check` exits `0` when all checks pass, and non-zero when at least one check
-fails (the failure details are printed first). Other commands exit non-zero on
-any error.
+`verify` exits 0 when every check passes, and non-zero when anything fails,
+after printing every problem it found.
 
 ## Library and testing
 

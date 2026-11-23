@@ -66,6 +66,11 @@ type Options struct {
 	// downloads. A nil Tracker reports nothing, which is the default.
 	Tracker *progress.Tracker
 
+	// MetadataCache holds metadata documents already downloaded, by
+	// location (see MetadataReport.Cache), so loading does not fetch them
+	// again. It is for a read-only Repo; one that publishes must not use it.
+	MetadataCache map[string][]byte
+
 	// now overrides the timestamp source (for tests); zero means time.Now.
 	now int64
 }
@@ -182,7 +187,7 @@ func (r *Repo) load(ctx context.Context) error {
 	r.old = repomd
 	r.raw = data
 
-	primary, err := r.loadData(ctx, repomd, "primary")
+	primary, err := r.loadData(ctx, repomd, typePrimary)
 	if err != nil {
 		return err
 	}
@@ -192,7 +197,7 @@ func (r *Repo) load(ctx context.Context) error {
 	}
 
 	var filelists map[string][]repodata.File
-	if fl, err := r.loadData(ctx, repomd, "filelists"); err == nil && fl != nil {
+	if fl, err := r.loadData(ctx, repomd, typeFilelists); err == nil && fl != nil {
 		if filelists, err = repodata.ParseFilelists(fl); err != nil {
 			return err
 		}
@@ -201,7 +206,7 @@ func (r *Repo) load(ctx context.Context) error {
 	}
 
 	var other map[string][]repodata.Changelog
-	if ot, err := r.loadData(ctx, repomd, "other"); err == nil && ot != nil {
+	if ot, err := r.loadData(ctx, repomd, typeOther); err == nil && ot != nil {
 		if other, err = repodata.ParseOther(ot); err != nil {
 			return err
 		}
@@ -428,6 +433,9 @@ func (r *Repo) nowUnix() int64 {
 
 // getAll reads an object fully into memory (metadata files are small).
 func (r *Repo) getAll(ctx context.Context, relpath string) ([]byte, error) {
+	if data, ok := r.opt.MetadataCache[relpath]; ok {
+		return data, nil
+	}
 	return xfer.ReadAll(ctx, r.be, relpath)
 }
 
