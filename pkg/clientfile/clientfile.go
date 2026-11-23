@@ -10,8 +10,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
+
+// maxConfigFile bounds a configuration file fetched over HTTP.
+const maxConfigFile = 1 << 20
 
 // FetchOverHTTP returns a function that downloads a client configuration file
 // (a .repo file, an apt sources file) over HTTP(S).
@@ -31,7 +35,16 @@ func FetchOverHTTP(ctx context.Context, timeout time.Duration, userAgent string)
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("HTTP %s", resp.Status)
 		}
-		return io.ReadAll(resp.Body)
+		// A configuration file is a few kilobytes; a server that sends more
+		// is not serving one.
+		data, err := io.ReadAll(io.LimitReader(resp.Body, maxConfigFile+1))
+		if err != nil {
+			return nil, err
+		}
+		if len(data) > maxConfigFile {
+			return nil, fmt.Errorf("%s is over %d bytes, too large for a configuration file", rawURL, maxConfigFile)
+		}
+		return data, nil
 	}
 }
 
@@ -43,14 +56,23 @@ func FetchOverHTTP(ctx context.Context, timeout time.Duration, userAgent string)
 // configuration file read from local disk is the operator's own and may name
 // anything.
 func CheckTargetScheme(configFile, target string) error {
-	if !isHTTPURL(configFile) || isHTTPURL(target) {
+	if !IsHTTPURL(configFile) || IsHTTPURL(target) {
 		return nil
 	}
 	return fmt.Errorf("%s names %q; a configuration file fetched over HTTP may only name http(s) repositories", configFile, target)
 }
 
-// isHTTPURL reports whether s is an http or https URL.
-func isHTTPURL(s string) bool {
+// IsHTTPURL reports whether s is an http or https URL as the backend reads
+// it. Whatever decides to fetch a configuration file over HTTP must use it
+// too, so that a file fetched is always one CheckTargetScheme treats as
+// fetched: a literal, lowercase "http://" or "https://" prefix (backend.Open
+// splits on "://" without folding case) followed by a host. url.Parse alone
+// would accept "HTTP://..." or "http:relative/path", which the backend
+// opens as something other than a web server.
+func IsHTTPURL(s string) bool {
+	if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
+		return false
+	}
 	u, err := url.Parse(s)
-	return err == nil && (u.Scheme == "http" || u.Scheme == "https")
+	return err == nil && u.Opaque == "" && u.Host != ""
 }

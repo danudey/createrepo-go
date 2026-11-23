@@ -576,8 +576,7 @@ func onOff(b bool) string {
 // readRepoFile reads a .repo file from local disk (a path or file:// URL) or
 // over http(s).
 func readRepoFile(ctx context.Context, input string) ([]byte, error) {
-	u, err := url.Parse(input)
-	if err == nil && (u.Scheme == "http" || u.Scheme == "https") {
+	if clientfile.IsHTTPURL(input) {
 		data, err := clientfile.FetchOverHTTP(ctx, 30*time.Second, "createrepo-go/"+version)(input)
 		if err != nil {
 			return nil, fmt.Errorf("fetch %s: %w", input, err)
@@ -585,7 +584,7 @@ func readRepoFile(ctx context.Context, input string) ([]byte, error) {
 		return data, nil
 	}
 	path := input
-	if err == nil && u.Scheme == "file" {
+	if u, err := url.Parse(input); err == nil && u.Scheme == "file" {
 		path = u.Path
 	}
 	return os.ReadFile(path)

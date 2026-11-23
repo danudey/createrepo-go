@@ -68,7 +68,7 @@ func CheckMetadata(ctx context.Context, be backend.Backend, suite string, compon
 		path      string
 		clearsign bool
 	}{{aptdata.InReleasePath(suite), true}, {aptdata.ReleasePath(suite), false}} {
-		data, err := xfer.ReadAll(ctx, be, spec.path)
+		data, err := xfer.ReadAllLimit(ctx, be, spec.path, aptdata.MaxIndexSize)
 		if errors.Is(err, backend.ErrNotExist) {
 			continue
 		}
@@ -169,19 +169,28 @@ func checkIndexFile(ctx context.Context, be backend.Backend, rel *aptdata.Releas
 		byHash = aptdata.ByHashPath(path.Dir(full), aptdata.HashSHA256, digest)
 	}
 
-	raw, err := xfer.ReadAll(ctx, be, full)
+	// Read no more than the Release records: one byte past it is enough to
+	// tell the file is the wrong size.
+	limit := int64(aptdata.MaxIndexSize)
+	if f.Size > 0 && f.Size < limit {
+		limit = f.Size + 1
+	}
+	raw, err := xfer.ReadAllLimit(ctx, be, full, limit)
 	if errors.Is(err, backend.ErrNotExist) {
 		if byHash == "" {
 			out.Absent = true
 			return fail("the file the Release lists is missing")
 		}
 		// apt with Acquire-By-Hash fetches only the by-hash copy.
-		raw, err = xfer.ReadAll(ctx, be, byHash)
+		raw, err = xfer.ReadAllLimit(ctx, be, byHash, limit)
 		if errors.Is(err, backend.ErrNotExist) {
 			out.Absent = true
 			return fail("the file the Release lists is missing, under its own name and under by-hash")
 		}
 		byHash = ""
+	}
+	if errors.Is(err, xfer.ErrTooLarge) {
+		return fail("it is larger than the %d bytes the Release records", f.Size)
 	}
 	if err != nil {
 		return fail("it cannot be read: %v", err)

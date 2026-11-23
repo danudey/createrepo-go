@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -133,6 +134,27 @@ func ReadAll(ctx context.Context, be backend.Backend, relpath string) ([]byte, e
 	}
 	defer rc.Close()
 	return io.ReadAll(rc)
+}
+
+// ErrTooLarge is returned by ReadAllLimit for an object over its limit.
+var ErrTooLarge = errors.New("object is larger than allowed")
+
+// ReadAllLimit is ReadAll that refuses an object over limit bytes, so a
+// repository cannot make a reader buffer whatever it claims.
+func ReadAllLimit(ctx context.Context, be backend.Backend, relpath string, limit int64) ([]byte, error) {
+	rc, err := be.Get(ctx, relpath)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(io.LimitReader(rc, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s: %w (over %d bytes)", relpath, ErrTooLarge, limit)
+	}
+	return data, nil
 }
 
 // HashObject streams relpath through sha256, returning the hex digest and the

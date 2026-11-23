@@ -23,6 +23,10 @@ const (
 	typeOther     = "other"
 )
 
+// maxRepomdSize bounds repomd.xml, which lists a few documents and is a few
+// kilobytes in practice.
+const maxRepomdSize = 16 << 20
+
 // MetadataFile is one repomd.xml data entry as CheckMetadata found it.
 type MetadataFile struct {
 	Type     string
@@ -75,7 +79,7 @@ func CheckMetadata(ctx context.Context, be backend.Backend) *MetadataReport {
 		rep.Problems = append(rep.Problems, Problem{Kind: KindMetadata, Subject: subject, Location: loc, Detail: detail})
 	}
 
-	raw, err := xfer.ReadAll(ctx, be, repomdPath)
+	raw, err := xfer.ReadAllLimit(ctx, be, repomdPath, maxRepomdSize)
 	switch {
 	case errors.Is(err, backend.ErrNotExist):
 		problem(repomdPath, "", "there is no repodata/repomd.xml: this is not a repository, or not its root")
@@ -133,9 +137,18 @@ func checkDataEntry(ctx context.Context, be backend.Backend, d repodata.DataEntr
 	if err := backend.CheckPath(d.Location); err != nil {
 		return fail("its location is unsafe: %v", err)
 	}
-	raw, err := xfer.ReadAll(ctx, be, d.Location)
+	// Read no more than repomd.xml records: one byte past it is enough to
+	// tell the file is the wrong size.
+	limit := int64(maxMetadataSize)
+	if d.Size > 0 && d.Size < limit {
+		limit = d.Size + 1
+	}
+	raw, err := xfer.ReadAllLimit(ctx, be, d.Location, limit)
 	if errors.Is(err, backend.ErrNotExist) {
 		return fail("the file repomd.xml references is missing")
+	}
+	if errors.Is(err, xfer.ErrTooLarge) {
+		return fail("it is larger than the %d bytes repomd.xml records", d.Size)
 	}
 	if err != nil {
 		return fail("it cannot be read: %v", err)
@@ -159,7 +172,7 @@ func checkDataEntry(ctx context.Context, be backend.Backend, d repodata.DataEntr
 		f.OK, f.Detail = true, fmt.Sprintf("size %d, %s ok; zchunk content not decoded", f.Size, d.ChecksumType)
 		return f
 	}
-	limit := int64(maxMetadataSize)
+	limit = int64(maxMetadataSize)
 	if d.OpenSize > 0 && d.OpenSize < limit {
 		limit = d.OpenSize
 	}

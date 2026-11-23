@@ -146,6 +146,22 @@ func TestCheckMetadataReportsWhatStopsTheIndexLoading(t *testing.T) {
 	}
 }
 
+// A document larger than repomd.xml records is refused after one byte past
+// its size, not buffered whole.
+func TestCheckMetadataStopsReadingAnOversizedDocument(t *testing.T) {
+	dir, md := publishedRepo(t)
+	loc := filepath.Join(dir, md.DataEntryByType("other").Location)
+	f, err := os.OpenFile(loc, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Write(bytes.Repeat([]byte{0}, 1<<20))
+	f.Close()
+	if got := problemText(checkMetadataDir(t, dir).Problems); !strings.Contains(got, "larger than the") {
+		t.Errorf("problems = %q", got)
+	}
+}
+
 func TestCheckMetadataFlagsADuplicateType(t *testing.T) {
 	dir, md := publishedRepo(t)
 	md.Data = append(md.Data, *md.DataEntryByType("other"))

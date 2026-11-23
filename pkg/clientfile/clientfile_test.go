@@ -15,6 +15,13 @@ func TestCheckTargetScheme(t *testing.T) {
 		{"http://example.com/x.list", "sftp://internal-host/srv", false},
 		{"/etc/yum.repos.d/x.repo", "file:///srv/mirror", true},
 		{"/etc/apt/sources.list", "/srv/mirror", true},
+		// url.Parse folds the scheme's case and accepts a missing "//";
+		// the backend does neither, and would open these some other way.
+		{"https://example.com/x.repo", "HTTP://internal/etc", false},
+		{"https://example.com/x.repo", "http:etc/passwd", false},
+		{"https://example.com/x.repo", "http:/etc/passwd", false},
+		// Not fetched (readers use IsHTTPURL too), so it is a local path.
+		{"HTTPS://example.com/x.repo", "/etc", true},
 	} {
 		if err := CheckTargetScheme(tc.config, tc.target); (err == nil) != tc.ok {
 			t.Errorf("CheckTargetScheme(%q, %q) = %v, want ok=%v", tc.config, tc.target, err, tc.ok)

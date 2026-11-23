@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/danudey/createrepo-go/pkg/apt/aptdata"
+	"github.com/danudey/createrepo-go/pkg/clientfile"
 )
 
 // The two entry types a sources file can name.
@@ -63,7 +64,7 @@ func IsFile(p string) bool {
 func Load(input string, fetch func(string) ([]byte, error)) ([]Entry, []string, error) {
 	var data []byte
 	var err error
-	if strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://") {
+	if clientfile.IsHTTPURL(input) {
 		data, err = fetch(input)
 	} else {
 		data, err = os.ReadFile(input)
