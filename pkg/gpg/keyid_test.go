@@ -74,7 +74,7 @@ func TestKeyIDIsNeverAnOption(t *testing.T) {
 	// gpg writes nothing for an empty keyring, so there must be a key for the
 	// injected --output to have something to write. Some runners cannot make
 	// one (no agent on macOS, a non-native path on Windows), so skip there.
-	gen := exec.Command(Binary(), "--batch", "--passphrase", "", "--quick-generate-key",
+	gen := exec.Command(Binary(), "--batch", "--pinentry-mode", "loopback", "--passphrase", "", "--quick-generate-key",
 		"CR Test <cr-test@example.com>", "ed25519", "sign", "never")
 	if out, err := gen.CombinedOutput(); err != nil {
 		t.Skipf("could not generate a test key with gpg: %v: %s", err, out)
