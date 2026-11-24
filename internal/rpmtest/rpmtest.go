@@ -67,15 +67,20 @@ func Split(b []byte) (Parts, error) {
 	}, nil
 }
 
-// EncodeHeader serializes tags into a header structure. Region tags (62, 63)
-// are left out: their offsets describe the original layout, and nothing these
-// tests exercise reads them.
+// EncodeHeader serializes tags into a header structure. A region tag (62 for
+// a signature header, 63 for a main header) in tags is rewritten to a region
+// covering the whole header, as rpm writes it, since its original offsets
+// describe the original layout; without one the header has no region, as an
+// rpm v3 package's main header does not.
 func EncodeHeader(tags map[int]*rpm.Tag) []byte {
 	ids := make([]int, 0, len(tags))
+	region := 0
 	for id := range tags {
-		if id != 62 && id != 63 {
-			ids = append(ids, id)
+		if id == 62 || id == 63 {
+			region = id
+			continue
 		}
+		ids = append(ids, id)
 	}
 	sort.Ints(ids)
 	var index, store bytes.Buffer
@@ -108,8 +113,22 @@ func EncodeHeader(tags map[int]*rpm.Tag) []byte {
 			_ = binary.Write(&index, binary.BigEndian, uint32(n)) //nolint:gosec // test headers are small
 		}
 	}
+	nidx := len(ids)
+	if region != 0 {
+		// The region entry comes first and points at a 16-byte trailer at
+		// the end of the store, whose offset is minus the index size.
+		nidx++
+		var entry bytes.Buffer
+		for _, n := range []int{region, int(rpm.TagTypeBinary), store.Len(), 16} {
+			_ = binary.Write(&entry, binary.BigEndian, uint32(n)) //nolint:gosec // test headers are small
+		}
+		for _, n := range []uint32{uint32(region), uint32(rpm.TagTypeBinary), uint32(-int32(nidx * 16)), 16} { //nolint:gosec // two's-complement offset, as rpm stores it
+			_ = binary.Write(&store, binary.BigEndian, n)
+		}
+		index = *bytes.NewBuffer(append(entry.Bytes(), index.Bytes()...))
+	}
 	out := []byte{0x8E, 0xAD, 0xE8, 0x01, 0, 0, 0, 0}
-	out = binary.BigEndian.AppendUint32(out, uint32(len(ids)))    //nolint:gosec // test headers are small
+	out = binary.BigEndian.AppendUint32(out, uint32(nidx))        //nolint:gosec // test headers are small
 	out = binary.BigEndian.AppendUint32(out, uint32(store.Len())) //nolint:gosec // test headers are small
 	out = append(out, index.Bytes()...)
 	return append(out, store.Bytes()...)

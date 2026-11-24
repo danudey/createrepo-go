@@ -33,6 +33,7 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp"
 
 	"github.com/danudey/createrepo-go/internal/rpm"
+	"github.com/danudey/createrepo-go/pkg/rpm/repodata"
 )
 
 // Signature-header tags (rpmtag.h, RPMSIGTAG_*).
@@ -96,17 +97,37 @@ type Result struct {
 	PayloadChecked bool
 	// NEVRA identifies the package, when its header could be read.
 	NEVRA string
+	// Header describes the main header, nil when it could not be read.
+	Header *HeaderInfo
+	// Incompatible lists why the policy's release cannot install the
+	// package although it is intact: features its rpm lacks.
+	Incompatible []string
+}
+
+// HeaderInfo is what the main header says about the package, for comparing
+// with what the repository metadata says.
+type HeaderInfo struct {
+	Name, Version, Release, Arch string
+	Epoch                        int
+	// Source reports a source package, which metadata lists as arch "src"
+	// (or "nosrc") whatever arch it was built on.
+	Source bool
+	// Start and End are the main header's byte range in the file, which
+	// primary.xml records as rpm:header-range.
+	Start, End int64
 }
 
 // OK reports whether the package has no problems of either kind.
-func (r *Result) OK() bool { return len(r.Problems) == 0 && len(r.SignatureProblems) == 0 }
+func (r *Result) OK() bool {
+	return len(r.Problems) == 0 && len(r.SignatureProblems) == 0 && len(r.Incompatible) == 0
+}
 
 // Intact reports whether the file itself is sound, whatever its signatures.
 func (r *Result) Intact() bool { return len(r.Problems) == 0 }
 
 // All returns every problem, file defects first.
 func (r *Result) All() []string {
-	return append(slices.Clone(r.Problems), r.SignatureProblems...)
+	return slices.Concat(r.Problems, r.SignatureProblems, r.Incompatible)
 }
 
 // Signed reports whether at least one signature makes the package signed for
@@ -226,6 +247,20 @@ func (c *checker) run(r io.Reader) error {
 	if err := pkg.Validate(); err != nil {
 		c.problem("invalid main header: %v", err)
 	}
+	if d := regionProblem(c.header, tagHeaderImmutable); d != "" {
+		// rpm 4.x and later load only headers with an immutable region,
+		// which rpm 3 did not write; every EL release fails such a package
+		// with "hdr load: BAD".
+		c.problem("its main header %s, as an rpm v3 package's does; rpm refuses to load it (%q)", d, "hdr load: BAD")
+	}
+	start := int64(leadSize + len(sigRaw) + (8-len(sigRaw)%8)%8)
+	c.res.Header = &HeaderInfo{
+		Name: pkg.Name(), Version: pkg.Version(), Release: pkg.Release(),
+		Arch: pkg.Architecture(), Epoch: pkg.Epoch(),
+		Source: pkg.SourceRPM() == "",
+		Start:  start, End: start + int64(len(c.header)),
+	}
+	c.checkRPMLib(pkg)
 
 	c.checkHeaderDigests()
 	headerSigs, payloadSigs := c.signatures()
@@ -253,6 +288,106 @@ func (c *checker) run(r io.Reader) error {
 		c.addSignature(s.finish(c.opt.Keyring, c.opt.Policy, c.now))
 	}
 	return nil
+}
+
+// tagHeaderImmutable is the main header's region tag (RPMTAG_HEADERIMMUTABLE).
+const tagHeaderImmutable = 63
+
+// regionProblem checks that a raw header (intro, index, store) opens with a
+// well-formed region entry for tag, as rpm's hdrblobVerifyRegion requires,
+// and returns what is wrong or "".
+func regionProblem(raw []byte, tag uint32) string {
+	if len(raw) < 32 {
+		return "has no entries"
+	}
+	nidx := binary.BigEndian.Uint32(raw[8:12])
+	store := raw[16+int(nidx)*16:]
+	e := raw[16:32]
+	if binary.BigEndian.Uint32(e[0:4]) != tag {
+		return "has no immutable region"
+	}
+	const typeBin, trailerSize = 7, 16
+	off := int64(binary.BigEndian.Uint32(e[8:12]))
+	if binary.BigEndian.Uint32(e[4:8]) != typeBin || binary.BigEndian.Uint32(e[12:16]) != trailerSize ||
+		off+trailerSize > int64(len(store)) {
+		return "has a malformed immutable region entry"
+	}
+	tr := store[off : off+trailerSize]
+	// The trailer's offset is minus the size of the index entries the region
+	// covers, which must be at least the region entry and at most all.
+	// The offset is stored as a 32-bit two's-complement negative number.
+	covered := int64(1<<32) - int64(binary.BigEndian.Uint32(tr[8:12]))
+	if binary.BigEndian.Uint32(tr[0:4]) != tag || binary.BigEndian.Uint32(tr[4:8]) != typeBin ||
+		covered%16 != 0 || covered/16 < 1 || covered/16 > int64(nidx) {
+		return "has a malformed immutable region trailer"
+	}
+	return ""
+}
+
+// checkRPMLib checks the package's rpmlib() requirements against the
+// features the policy's release provides. rpm refuses to install a package
+// whose rpmlib() requirement it cannot satisfy ("rpmlib(X) is needed by ...").
+func (c *checker) checkRPMLib(pkg *rpm.Package) {
+	if c.opt.Policy.RPMLib == nil {
+		return
+	}
+	for _, d := range pkg.Requires() {
+		name, ok := strings.CutPrefix(d.Name(), "rpmlib(")
+		if !ok {
+			continue
+		}
+		name = strings.TrimSuffix(name, ")")
+		have, ok := c.opt.Policy.RPMLib[name]
+		req := d.Name()
+		if v := d.Version(); v != "" {
+			req += " " + senseString(d.Flags()) + " " + v
+			if d.Release() != "" {
+				req += "-" + d.Release()
+			}
+		}
+		switch {
+		case !ok:
+			c.res.Incompatible = append(c.res.Incompatible, fmt.Sprintf(
+				"it requires %s, which %s (%s) does not provide, so it cannot be installed there", req, c.opt.Policy.name(), c.opt.Policy.RPM))
+		case d.Version() != "" && !satisfies(have, d):
+			c.res.Incompatible = append(c.res.Incompatible, fmt.Sprintf(
+				"it requires %s, but %s (%s) provides %s = %s, so it cannot be installed there", req, c.opt.Policy.name(), c.opt.Policy.RPM, d.Name(), have))
+		}
+	}
+}
+
+// satisfies reports whether a feature provided at version have ("V-R")
+// meets a versioned requirement.
+func satisfies(have string, d rpm.Dependency) bool {
+	hv, hr, _ := strings.Cut(have, "-")
+	var cmp int
+	if d.Release() == "" {
+		cmp = repodata.CompareVersions(hv, d.Version())
+	} else {
+		cmp = repodata.CompareEVR(0, hv, hr, d.Epoch(), d.Version(), d.Release())
+	}
+	f := d.Flags()
+	switch {
+	case cmp < 0:
+		return f&rpm.DepFlagLesser != 0
+	case cmp > 0:
+		return f&rpm.DepFlagGreater != 0
+	}
+	return f&rpm.DepFlagEqual != 0
+}
+
+func senseString(f int) string {
+	s := ""
+	if f&rpm.DepFlagLesser != 0 {
+		s += "<"
+	}
+	if f&rpm.DepFlagGreater != 0 {
+		s += ">"
+	}
+	if f&rpm.DepFlagEqual != 0 {
+		s += "="
+	}
+	return s
 }
 
 // readHeader reads one header structure (no padding), returning its bytes.

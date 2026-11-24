@@ -52,6 +52,8 @@ const (
 	KindPackage   = "package"
 	KindSignature = "signature"
 	KindMetadata  = "metadata"
+	// KindCompat is a sound package the target release cannot install.
+	KindCompat = "compatibility"
 )
 
 // repomdSigPath is the detached signature of repomd.xml.
@@ -385,8 +387,38 @@ func (r *Repo) verifyPackage(ctx context.Context, p *repodata.Package, opt Verif
 		for _, d := range inspected.SignatureProblems {
 			problems = append(problems, Problem{Kind: KindSignature, Subject: p.NEVRA(), Location: p.Location, Detail: d})
 		}
+		for _, d := range inspected.Incompatible {
+			problems = append(problems, Problem{Kind: KindCompat, Subject: p.NEVRA(), Location: p.Location, Detail: d})
+		}
+		for _, d := range headerMismatches(p, inspected.Header) {
+			problems = append(problems, Problem{Kind: KindPackage, Subject: p.NEVRA(), Location: p.Location, Detail: d})
+		}
 	}
 	return problems, tally, inspected
+}
+
+// headerMismatches compares what an RPM's header says with what primary.xml
+// says about it. dnf resolves dependencies with the metadata and installs the
+// header, so a package that differs is not the one dnf chose; and dnf reads
+// header-range to fetch the header alone.
+func headerMismatches(p *repodata.Package, h *pkgcheck.HeaderInfo) []string {
+	if h == nil {
+		return nil
+	}
+	arch := h.Arch
+	if h.Source && (p.Arch == "src" || p.Arch == "nosrc") {
+		arch = p.Arch
+	}
+	hdr := fmt.Sprintf("%s-%d:%s-%s.%s", h.Name, h.Epoch, h.Version, h.Release, arch)
+	meta := fmt.Sprintf("%s-%d:%s-%s.%s", p.Name, p.Epoch, p.Version, p.Release, p.Arch)
+	var out []string
+	if hdr != meta {
+		out = append(out, fmt.Sprintf("its header says it is %s, but the metadata says %s; the metadata was not generated from this file", hdr, meta))
+	}
+	if p.HeaderEnd > 0 && (int64(p.HeaderStart) != h.Start || int64(p.HeaderEnd) != h.End) {
+		out = append(out, fmt.Sprintf("its header occupies bytes %d-%d, but the metadata's header-range says %d-%d", h.Start, h.End, p.HeaderStart, p.HeaderEnd))
+	}
+	return out
 }
 
 // readPackage checks the package at location: in full when it is a local

@@ -107,6 +107,19 @@ func TestVerifyVerbose(t *testing.T) {
 	}
 }
 
+// A repository with nothing for the client's architecture looks empty to it.
+func TestVerifyWarnsWhenNoPackageIsForTheArch(t *testing.T) {
+	isolateGPG(t)
+	dir := t.TempDir()
+	if out, err := runCLI(t, "add", dir, libfooRPM); err != nil {
+		t.Fatalf("publish: %v\n%s", err, out)
+	}
+	out, _ := runCLI(t, "verify", dir, "--arch", "s390x")
+	if !strings.Contains(out, "no package is for s390x") {
+		t.Errorf("no warning about s390x:\n%s", out)
+	}
+}
+
 // One .repo section with $releasever describes a repository per release;
 // --releasever 8,9 verifies each.
 func TestVerifyRepoFileReleaseMatrix(t *testing.T) {
@@ -124,7 +137,11 @@ func TestVerifyRepoFileReleaseMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify both releases: %v\n%s", err, out)
 	}
-	for _, want := range []string{"[x releasever=8] OK", "[x releasever=9] OK"} {
+	for _, want := range []string{
+		"[x releasever=8] OK", "[x releasever=9] OK",
+		// Each release's packages are judged as that release's rpm does.
+		"[x releasever=8] judging packages as rhel8's rpm does", "[x releasever=9] judging packages as rhel9's rpm does",
+	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}

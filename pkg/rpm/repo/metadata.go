@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/danudey/createrepo-go/pkg/backend"
@@ -51,7 +53,16 @@ type MetadataReport struct {
 	// filelists, other) by location, for Options.MetadataCache, so verify
 	// does not download them twice.
 	Cache map[string][]byte
+
+	// What the package documents hold, for checking them against each
+	// other once all three are read.
+	primary  []*repodata.Package
+	declared map[string]int // the packages="N" each document states
+	refs     map[string][]pkgRef
 }
+
+// pkgRef is one <package> entry of filelists.xml or other.xml.
+type pkgRef struct{ pkgid, name, arch string }
 
 // Usable reports whether the package index can be loaded: repomd.xml and
 // primary.xml are both sound.
@@ -74,7 +85,7 @@ func (m *MetadataReport) Usable() bool {
 // package documents (primary, filelists, other) must also parse. Every defect
 // is reported rather than stopping the check, so one pass shows them all.
 func CheckMetadata(ctx context.Context, be backend.Backend) *MetadataReport {
-	rep := &MetadataReport{Cache: map[string][]byte{}}
+	rep := &MetadataReport{Cache: map[string][]byte{}, declared: map[string]int{}, refs: map[string][]pkgRef{}}
 	problem := func(subject, loc, detail string) {
 		rep.Problems = append(rep.Problems, Problem{Kind: KindMetadata, Subject: subject, Location: loc, Detail: detail})
 	}
@@ -120,8 +131,136 @@ func CheckMetadata(ctx context.Context, be backend.Backend) *MetadataReport {
 		if !f.OK {
 			problem(d.Type+" metadata", d.Location, f.Detail)
 		}
+		if weakChecksum(d.ChecksumType) {
+			rep.Warnings = append(rep.Warnings, Problem{
+				Kind: KindMetadata, Subject: d.Type + " metadata", Location: d.Location,
+				Detail: fmt.Sprintf("repomd.xml records a %s checksum for it; %s", d.ChecksumType, weakWhy),
+			})
+		}
 	}
+	crossCheck(rep)
 	return rep
+}
+
+// weakWhy says why a weak checksum type matters.
+const weakWhy = "it is a weak hash, which a system in FIPS mode refuses and which does not protect against a deliberately altered file"
+
+// weakChecksum reports a checksum type that is known but weak.
+func weakChecksum(algo string) bool {
+	switch strings.ToLower(algo) {
+	case "md5", "sha", "sha1":
+		return true
+	}
+	return false
+}
+
+// crossCheck checks the package documents against each other and primary.xml
+// against itself: what dnf would see that the files alone do not show.
+func crossCheck(rep *MetadataReport) {
+	if rep.primary == nil {
+		return
+	}
+	add := func(warn bool, subject, loc, format string, a ...any) {
+		p := Problem{Kind: KindMetadata, Subject: subject, Location: loc, Detail: fmt.Sprintf(format, a...)}
+		if warn {
+			rep.Warnings = append(rep.Warnings, p)
+		} else {
+			rep.Problems = append(rep.Problems, p)
+		}
+	}
+
+	byID := map[string]*repodata.Package{}
+	byLoc := map[string]*repodata.Package{}
+	byNEVRA := map[string]*repodata.Package{}
+	bases := map[string]bool{}
+	weak := 0
+	for _, p := range rep.primary {
+		subject := p.NEVRA()
+		switch {
+		case p.PkgID == "":
+			add(false, subject, p.Location, "primary.xml records no checksum for it, so dnf cannot check the download")
+		case byID[p.PkgID] != nil:
+			add(false, subject, p.Location, "primary.xml lists its checksum %s again, for %s; dnf keeps one entry and ignores the other", p.PkgID, byID[p.PkgID].NEVRA())
+		default:
+			byID[p.PkgID] = p
+		}
+		if _, known := integrity.NewHash(p.ChecksumType); !known && p.PkgID != "" {
+			add(false, subject, p.Location, "primary.xml records a checksum of unknown type %q, which dnf cannot check", p.ChecksumType)
+		} else if weakChecksum(p.ChecksumType) {
+			weak++
+		}
+		switch err := backend.CheckPath(p.Location); {
+		case p.Location == "":
+			add(false, subject, "", "primary.xml gives it no location, so dnf cannot download it")
+		case err != nil:
+			add(false, subject, p.Location, "its location is unsafe: %v", err)
+		case byLoc[p.Location] != nil:
+			add(false, subject, p.Location, "%s is published at the same location; only one file can be there", byLoc[p.Location].NEVRA())
+		default:
+			byLoc[p.Location] = p
+		}
+		if q := byNEVRA[subject]; q != nil && q.PkgID != p.PkgID {
+			add(false, subject, p.Location, "primary.xml lists two different packages as %s (also at %s); dnf picks either, and a client that has one installed cannot verify the other", subject, q.Location)
+		} else if q == nil {
+			byNEVRA[subject] = p
+		}
+		if p.XMLBase != "" {
+			bases[p.XMLBase] = true
+		}
+	}
+	if weak > 0 {
+		add(true, "primary metadata", "", "%d package(s) are recorded with a weak checksum (md5 or sha1); %s", weak, weakWhy)
+	}
+	for b := range bases {
+		add(true, "primary metadata", "", "packages carry xml:base=%q, so dnf downloads them from there, not from this repository; verify checked the copies here, which may not be the ones clients get", b)
+	}
+
+	if n, ok := rep.declared[typePrimary]; ok && n != len(rep.primary) {
+		add(true, "primary metadata", "", "primary.xml says it lists %d package(s) but lists %d", n, len(rep.primary))
+	}
+	for _, typ := range []string{typeFilelists, typeOther} {
+		refs, ok := rep.refs[typ]
+		if !ok {
+			continue // absent or unreadable, reported already
+		}
+		if n, ok := rep.declared[typ]; ok && n != len(refs) {
+			add(true, typ+" metadata", "", "%s.xml says it lists %d package(s) but lists %d", typ, n, len(refs))
+		}
+		seen := map[string]bool{}
+		var extra int
+		for _, r := range refs {
+			p := byID[r.pkgid]
+			if p == nil {
+				extra++
+				continue
+			}
+			if seen[r.pkgid] {
+				add(true, p.NEVRA(), p.Location, "%s.xml lists it more than once", typ)
+			}
+			seen[r.pkgid] = true
+			if (r.name != "" && r.name != p.Name) || (r.arch != "" && r.arch != p.Arch) {
+				add(false, p.NEVRA(), p.Location, "%s.xml gives its checksum to %s.%s; the documents were not generated together", typ, r.name, r.arch)
+			}
+		}
+		if extra > 0 {
+			add(true, typ+" metadata", "", "%s.xml lists %d package(s) primary.xml does not; the documents were not generated together", typ, extra)
+		}
+		missing := 0
+		for id := range byID {
+			if !seen[id] {
+				missing++
+			}
+		}
+		if missing > 0 {
+			// filelists is how dnf resolves a dependency on a file; other
+			// only holds changelogs.
+			why := "dnf cannot resolve a dependency on a file they hold"
+			if typ == typeOther {
+				why = "dnf shows no changelog for them"
+			}
+			add(typ == typeOther, typ+" metadata", "", "%d package(s) in primary.xml are missing from %s.xml, so %s; the documents were not generated together", missing, typ, why)
+		}
+	}
 }
 
 // checkDataEntry checks one document repomd.xml references.
@@ -198,11 +337,23 @@ func checkDataEntry(ctx context.Context, be backend.Backend, d repodata.DataEntr
 	var parseErr error
 	switch d.Type {
 	case typePrimary:
-		_, parseErr = repodata.ParsePrimary(open)
-	case typeFilelists:
-		_, parseErr = repodata.ParseFilelists(open)
-	case typeOther:
-		_, parseErr = repodata.ParseOther(open)
+		var pkgs []*repodata.Package
+		if pkgs, parseErr = repodata.ParsePrimary(open); parseErr == nil {
+			rep.primary = pkgs
+			if n, ok := declaredCount(open); ok {
+				rep.declared[d.Type] = n
+			}
+		}
+	case typeFilelists, typeOther:
+		var refs []pkgRef
+		var n int
+		var ok bool
+		if refs, n, ok, parseErr = scanPackages(open); parseErr == nil {
+			rep.refs[d.Type] = refs
+			if ok {
+				rep.declared[d.Type] = n
+			}
+		}
 	}
 	if parseErr != nil {
 		return fail("it does not parse: %v", parseErr)
@@ -213,6 +364,74 @@ func checkDataEntry(ctx context.Context, be backend.Backend, d repodata.DataEntr
 	}
 	f.OK, f.Detail = true, fmt.Sprintf("size %d, %s and open checksum ok", f.Size, d.ChecksumType)
 	return f
+}
+
+// declaredCount reads the packages="N" attribute of a document's root element.
+func declaredCount(doc []byte) (int, bool) {
+	dec := xml.NewDecoder(bytes.NewReader(doc))
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return 0, false
+		}
+		if se, ok := tok.(xml.StartElement); ok {
+			return packagesAttr(se)
+		}
+	}
+}
+
+func packagesAttr(se xml.StartElement) (int, bool) {
+	for _, a := range se.Attr {
+		if a.Name.Local == "packages" {
+			n, err := strconv.Atoi(a.Value)
+			return n, err == nil
+		}
+	}
+	return 0, false
+}
+
+// scanPackages reads filelists.xml or other.xml for its root's packages="N"
+// and each <package>'s pkgid, name and arch, checking the document is
+// well-formed XML on the way.
+func scanPackages(doc []byte) (refs []pkgRef, declared int, hasDeclared bool, err error) {
+	dec := xml.NewDecoder(bytes.NewReader(doc))
+	depth, sawRoot := 0, false
+	for {
+		tok, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			if sawRoot && depth == 0 {
+				return refs, declared, hasDeclared, nil
+			}
+			return nil, 0, false, io.ErrUnexpectedEOF
+		}
+		if err != nil {
+			return nil, 0, false, err
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			depth++
+			switch {
+			case depth == 1:
+				sawRoot = true
+				declared, hasDeclared = packagesAttr(t)
+			case depth == 2 && t.Name.Local == "package":
+				var r pkgRef
+				for _, a := range t.Attr {
+					switch a.Name.Local {
+					case "pkgid":
+						r.pkgid = a.Value
+					case "name":
+						r.name = a.Value
+					case "arch":
+						r.arch = a.Value
+					}
+				}
+				refs = append(refs, r)
+			}
+		case xml.EndElement:
+			depth--
+		}
+	}
 }
 
 // digest hashes data with the named checksum type and compares it with want.
