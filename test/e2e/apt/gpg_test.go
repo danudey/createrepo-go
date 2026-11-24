@@ -33,7 +33,7 @@ func newSigningKey(t *testing.T) *signingKey {
 	t.Setenv("GNUPGHOME", home)
 
 	const uid = "createapt e2e <e2e@example.invalid>"
-	gen := exec.Command("gpg", "--batch", "--passphrase", "", "--quick-generate-key",
+	gen := exec.Command("gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "", "--quick-generate-key",
 		uid, "rsa3072", "sign", "never")
 	if out, err := gen.CombinedOutput(); err != nil {
 		t.Skipf("could not generate a signing key with gpg: %v\n%s", err, out)

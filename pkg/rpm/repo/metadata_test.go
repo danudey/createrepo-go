@@ -162,6 +162,100 @@ func TestCheckMetadataStopsReadingAnOversizedDocument(t *testing.T) {
 	}
 }
 
+// replaceDoc republishes the typ document with edit applied to its XML.
+func replaceDoc(t *testing.T, dir string, md *repodata.Repomd, typ string, edit func(string) string) {
+	t.Helper()
+	for i, d := range md.Data {
+		if d.Type != typ {
+			continue
+		}
+		f, err := os.Open(filepath.Join(dir, d.Location))
+		if err != nil {
+			t.Fatal(err)
+		}
+		zr, err := gzip.NewReader(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var open bytes.Buffer
+		open.ReadFrom(zr)
+		f.Close()
+		md.Data = append(md.Data[:i], md.Data[i+1:]...)
+		addDocument(t, dir, md, typ, []byte(edit(open.String())))
+		return
+	}
+	t.Fatalf("no %s document", typ)
+}
+
+// Defects only visible by reading the documents against each other: each
+// is a sound file, so nothing before this caught them.
+func TestCheckMetadataCrossChecksTheDocuments(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		typ    string
+		edit   func(string) string
+		want   string
+		isWarn bool
+	}{
+		{"package missing from filelists", typeFilelists, func(s string) string {
+			i, j := strings.Index(s, "<package "), strings.Index(s, "</package>")
+			return s[:i] + s[j+len("</package>"):]
+		}, "missing from filelists.xml", false},
+		{"package missing from other", typeOther, func(s string) string {
+			i, j := strings.Index(s, "<package "), strings.Index(s, "</package>")
+			return s[:i] + s[j+len("</package>"):]
+		}, "missing from other.xml", true},
+		{"filelists names another package", typeFilelists, func(s string) string {
+			return strings.Replace(s, `name="`, `name="x`, 1)
+		}, "gives its checksum to", false},
+		{"duplicate package", typePrimary, func(s string) string {
+			i, j := strings.Index(s, "<package "), strings.Index(s, "</package>")+len("</package>")
+			return s[:j] + s[i:j] + s[j:]
+		}, "lists its checksum", false},
+		{"xml:base", typePrimary, func(s string) string {
+			return strings.Replace(s, "<location ", `<location xml:base="https://elsewhere.example/" `, 1)
+		}, "xml:base", true},
+		{"wrong declared count", typePrimary, func(s string) string {
+			return strings.Replace(s, `packages="`, `packages="9`, 1)
+		}, "says it lists", true},
+		{"weak package checksum", typePrimary, func(s string) string {
+			return strings.Replace(s, `<checksum type="sha256"`, `<checksum type="sha1"`, 1)
+		}, "weak checksum", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, md := publishedRepo(t)
+			replaceDoc(t, dir, md, tc.typ, tc.edit)
+			rep := checkMetadataDir(t, dir)
+			got, other := problemText(rep.Problems), problemText(rep.Warnings)
+			if tc.isWarn {
+				got, other = other, got
+			}
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("want %q in %s; problems:\n%s\nwarnings:\n%s", tc.want, map[bool]string{true: "warnings", false: "problems"}[tc.isWarn], problemText(rep.Problems), problemText(rep.Warnings))
+			}
+			if strings.Contains(other, tc.want) {
+				t.Errorf("%q reported as the wrong severity", tc.want)
+			}
+		})
+	}
+}
+
+// A sound RPM whose header is not what primary.xml describes: dnf resolves
+// with the metadata and installs the header, so they must agree.
+func TestVerifyComparesEachHeaderWithTheMetadata(t *testing.T) {
+	dir, md := publishedRepo(t)
+	replaceDoc(t, dir, md, typePrimary, func(s string) string {
+		s = strings.Replace(s, `rel="3"`, `rel="4"`, 1)
+		return strings.Replace(s, `<rpm:header-range start="`, `<rpm:header-range start="1`, 1)
+	})
+	got := problemText(verifyDir(t, dir, VerifyOptions{}).Problems)
+	for _, want := range []string{"its header says it is hello-0:2.10-3.noarch, but the metadata says hello-0:2.10-4.noarch", "header-range says"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("problems lack %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestCheckMetadataFlagsADuplicateType(t *testing.T) {
 	dir, md := publishedRepo(t)
 	md.Data = append(md.Data, *md.DataEntryByType("other"))

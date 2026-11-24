@@ -185,6 +185,9 @@ type verifyTarget struct {
 	// signature present must verify against them.
 	keys       openpgp.EntityList
 	keySources []string
+	// releasever is the $releasever of the client a .repo file was read
+	// for; it picks the target unless --target is given.
+	releasever string
 	// fromRepoFile says gpgCheck and repoGPGCheck are a .repo file's
 	// settings, which decide what has to be signed and trusted.
 	fromRepoFile bool
@@ -285,6 +288,12 @@ func verifyOne(cmd *cobra.Command, location string, vf verifyFlags, t verifyTarg
 	if err != nil {
 		return err
 	}
+	if len(t.arches) > 0 && len(vf.names) == 0 && res.Packages == 0 && len(r.Selected(repo.VerifyOptions{})) > 0 {
+		res.Warnings = append(res.Warnings, repo.Problem{
+			Kind: repo.KindMetadata, Subject: "packages",
+			Detail: fmt.Sprintf("no package is for %s (or noarch), so to a client of that architecture the repository is empty", strings.Join(t.arches, "/")),
+		})
+	}
 	if n := report(append(meta.Warnings, res.Warnings...), append(meta.Problems, res.Problems...)); n > 0 {
 		return fmt.Errorf("%d problem(s) found", n)
 	}
@@ -306,8 +315,16 @@ func verifyOptions(cmd *cobra.Command, cfg *repoconfig.Config, vf verifyFlags, t
 		SkipPackageContents:   vf.skipPackageContents,
 	}
 
+	// The release a client runs decides what its rpm accepts: --target
+	// names it outright, a .repo file's $releasever names the client's, and
+	// otherwise the repository's recorded target is the best guess.
 	target := gf.target
-	if !cmd.Flags().Changed("target") && cfg != nil {
+	switch fromRel := targetForReleasever(t.releasever); {
+	case cmd.Flags().Changed("target"):
+	case fromRel != "":
+		target = fromRel
+		fmt.Fprintf(cmd.OutOrStdout(), "%sjudging packages as %s's rpm does (releasever %s)\n", t.label, fromRel, t.releasever)
+	case cfg != nil:
 		target = cfg.Target
 	}
 	pol, err := pkgcheck.PolicyFor(canonicalTarget(target))
@@ -545,6 +562,7 @@ func verifySection(cmd *cobra.Command, input string, e expandedSection, vf verif
 	t := verifyTarget{
 		label:        label,
 		arches:       e.arches,
+		releasever:   e.releasever,
 		fromRepoFile: true,
 		gpgCheck:     s.GPGCheck,
 		repoGPGCheck: s.RepoGPGCheck,
@@ -598,6 +616,25 @@ type expandedSection struct {
 	label string
 	// arches limits the packages checked.
 	arches []string
+	// releasever is the $releasever this expansion used, if any; it says
+	// which release's rpm the packages are judged as.
+	releasever string
+}
+
+// targetForReleasever maps a dnf $releasever to the --target whose rpm a
+// client of that release runs: "9" and "9.4" are rhel9. Other values
+// (Fedora's, say) have no target.
+func targetForReleasever(rel string) string {
+	major, _, _ := strings.Cut(rel, ".")
+	switch major {
+	case "8":
+		return pkgcheck.TargetRHEL8
+	case "9":
+		return pkgcheck.TargetRHEL9
+	case "10":
+		return pkgcheck.TargetRHEL10
+	}
+	return ""
 }
 
 // expandSection substitutes s's variables, once for each --releasever and
@@ -628,7 +665,12 @@ func expandSection(s repofile.Section, vf verifyFlags) ([]expandedSection, error
 			if rel != "" {
 				label += " releasever=" + rel
 			}
-			e := expandedSection{Section: exp, arches: vf.arches}
+			e := expandedSection{Section: exp, arches: vf.arches, releasever: rel}
+			if rel == "" && len(vf.releasevers) == 1 {
+				// The section does not use $releasever, but the client's
+				// release still decides what its rpm accepts.
+				e.releasever = vf.releasevers[0]
+			}
 			if arch != "" {
 				label += " arch=" + arch
 				e.arches = []string{arch}

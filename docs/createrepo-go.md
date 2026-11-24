@@ -656,11 +656,19 @@ at rest and one published live.
    filelists, other, and also comps, updateinfo, modules and the sqlite
    databases) is present with the recorded size and checksum, decompresses,
    and has the recorded open size and open checksum. Primary, filelists and
-   other must also parse.
+   other must also parse, and agree with each other: every package in primary
+   is in filelists (dnf resolves file dependencies from it) and other, under
+   the same name and architecture, and each `packages="N"` count is right.
+   Within primary, no checksum, location or NEVRA may appear for two entries,
+   and every location must be a safe relative path. A weak checksum type (md5,
+   sha1) and an `xml:base` that sends clients elsewhere are warnings.
 2. **The metadata signature.** `repomd.xml.asc` is checked; see
    [Signatures](#signatures).
 3. **Packages.** Every RPM the metadata references is present with the size
    and checksum the metadata records, and is intact, with sound signatures.
+   Its header must name the package primary describes (name, epoch, version,
+   release, arch) and sit at the recorded `header-range`, and the target
+   release must be able to install it; see [Package contents](#package-contents).
 4. **Dependencies.** Every package requirement the repository could satisfy
    from its own packages must be met by an available version. A requirement no
    package in the repository provides (glibc, `/bin/sh`) is left to the
@@ -725,6 +733,18 @@ So every RPM is also checked against itself — that it parses, that its header
 and payload digests match, and that every signature it carries matches what it
 signs. This needs no `rpm` installation.
 
+Each package is also checked against the target release (see
+[Signatures](#signatures) for how the target is chosen), with the results
+measured against RHEL 8, 9 and 10's rpm:
+
+- **rpm v3 packages** (a header without an immutable region) are a problem
+  on every target: rpm 4.x and later refuse them with `hdr load: BAD`.
+- **`rpmlib()` requirements** must be features the target's rpm provides, at
+  a version it satisfies. rpm refuses a package that needs one it lacks
+  (`rpmlib(X) is needed by ...`).
+- **rpm v6 packages** install on RHEL 8, 9 and 10. Only their `OPENPGP`
+  signature matters, and that is a signature rule, below.
+
 How much of each package is read depends, again, on the backend:
 
 | Backend | What is read |
@@ -760,9 +780,11 @@ Signatures are checked whenever they are present, with no flag needed:
   by another key, or an unsigned package in a signed repository, is a problem.
   When the config records a signing key, that key is the one every package
   and `repomd.xml` must be signed by.
-- **The target's rules.** Signatures are judged as the `--target` release's
-  rpm judges them (the recorded target by default). RHEL 8 and 9 cannot read
-  the rpm 6 `OPENPGP` signature, so a package signed only that way is unsigned
+- **The target's rules.** Signatures are judged as the target release's rpm
+  judges them: `--target`, or for a `.repo` file the release its
+  `--releasever` names (8, 9 and 10 map to rhel8, rhel9 and rhel10), or else
+  the recorded target. RHEL 8 and 9 cannot read the rpm 6 `OPENPGP`
+  signature (RHEL 10's rpm 4.19 has it backported), so a package signed only that way is unsigned
   to their clients (a warning, or a problem when signatures are required).
   RHEL 9 and later refuse SHA-1 and DSA signatures and RSA keys under 2048
   bits, so such a signature is a problem for those targets.
@@ -804,6 +826,10 @@ repository in the file the way a client using that file would:
 - `--releasever` and `--arch` take comma-separated lists. A section that uses
   the variable is verified once per value, so one section describing EL8 and
   EL9 repositories is verified as both
+- each repository's packages are judged as the rpm of the release its
+  `--releasever` names, unless `--target` is given. An `--arch` for which the
+  repository has no package (nor noarch) is a warning: to that client the
+  repository is empty
 
 ```sh
 createrepo-go verify ./example.repo --releasever 8,9 --arch x86_64,aarch64

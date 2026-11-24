@@ -274,7 +274,7 @@ func TestGPGSignerAgreesWithGPG(t *testing.T) {
 	if err := os.Chmod(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	gen := exec.Command(Binary(), "--batch", "--passphrase", "", "--quick-generate-key",
+	gen := exec.Command(Binary(), "--batch", "--pinentry-mode", "loopback", "--passphrase", "", "--quick-generate-key",
 		"createapt test <keyring@example.invalid>", "rsa3072", "sign", "never")
 	if out, err := gen.CombinedOutput(); err != nil {
 		t.Skipf("could not generate a test key with gpg: %v: %s", err, out)

@@ -48,6 +48,11 @@ func fingerprintFromFile(path string) (string, error) {
 // fingerprintFromKeyring asks gpg to resolve an id or uid against the local
 // keyring. gpg's colon-delimited output is parsed rather than its human
 // output, which is not stable across versions.
+//
+// An id with a trailing "!" pins that exact key or subkey, overriding gpg's
+// choice of signing subkey. It resolves to that key's own fingerprint, "!"
+// kept, so a later publish that reads it back signs with the same subkey
+// rather than whichever one gpg prefers by then.
 func fingerprintFromKeyring(keyID string) (string, error) {
 	// "--" keeps a key id that starts with "-" from being read as an option.
 	cmd := Command("--with-colons", "--fingerprint", "--", keyID)
@@ -56,6 +61,9 @@ func fingerprintFromKeyring(keyID string) (string, error) {
 	cmd.Stderr = &errBuf
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("gpg --fingerprint %s: %w: %s", keyID, err, strings.TrimSpace(errBuf.String()))
+	}
+	if pinned, ok := strings.CutSuffix(keyID, "!"); ok {
+		return pinnedFingerprint(out.String(), keyID, pinned)
 	}
 	// The first fpr: record after the first pub: record is the primary key's.
 	seenPub := false
@@ -76,6 +84,20 @@ func fingerprintFromKeyring(keyID string) (string, error) {
 	return "", fmt.Errorf("gpg reported no fingerprint for %q", keyID)
 }
 
+// pinnedFingerprint finds, in gpg's colon output for keyID, the fingerprint of
+// the key or subkey that pinned (keyID without its "!") names, and returns it
+// with the "!".
+func pinnedFingerprint(colons, keyID, pinned string) (string, error) {
+	want := strings.ToLower(strings.TrimPrefix(strings.TrimPrefix(pinned, "0x"), "0X"))
+	for _, line := range strings.Split(colons, "\n") {
+		fields := strings.Split(line, ":")
+		if len(fields) > 9 && fields[0] == "fpr" && want != "" && strings.HasSuffix(strings.ToLower(fields[9]), want) {
+			return strings.ToUpper(fields[9]) + "!", nil
+		}
+	}
+	return "", fmt.Errorf("gpg reported no key or subkey matching %q", keyID)
+}
+
 // ExportPublicKey writes the armored public key for keyID out of the local
 // keyring. It is what lets a repository publish the key its clients need to
 // install alongside it.
@@ -83,6 +105,9 @@ func ExportPublicKey(keyID string) ([]byte, error) {
 	if keyID == "" {
 		return nil, fmt.Errorf("no key id given")
 	}
+	// A pinned subkey ("ID!") would make gpg export that subkey alone.
+	// Clients install the whole key, so that is what is exported.
+	keyID = strings.TrimSuffix(keyID, "!")
 	cmd := Command("--armor", "--export", "--", keyID)
 	var out, errBuf bytes.Buffer
 	cmd.Stdout = &out

@@ -17,7 +17,9 @@ func TestPackageSignAuditFindsAMissingSubkey(t *testing.T) {
 	home, keyID, stalePub, _ := setupKey(t)
 	t.Setenv("GNUPGHOME", home)
 	env := append(os.Environ(), "GNUPGHOME="+home)
-	run(t, env, "gpg", "--batch", "--quick-add-key", keyID, "rsa2048", "sign", "0")
+	// Loopback with an empty passphrase: without it gpg-agent opens pinentry to
+	// ask for the new subkey's passphrase.
+	run(t, env, "gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", "", "--quick-add-key", keyID, "rsa2048", "sign", "0")
 	fullPub := home + "/full.asc"
 	writeCmd(t, env, fullPub, "gpg", "--export", "--armor", keyID)
 

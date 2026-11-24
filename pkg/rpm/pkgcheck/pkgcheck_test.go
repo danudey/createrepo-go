@@ -275,6 +275,81 @@ func TestInconsistentDependencyArraysAreReportedNotFatal(t *testing.T) {
 	}
 }
 
+// The test encoder writes a region exactly when the header had one, so a
+// re-encoded package is still a v4 package.
+func TestAReencodedHeaderKeepsItsRegion(t *testing.T) {
+	p := split(t, helloRPM(t))
+	h, err := rpm.ParseHeader(p.Header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Header = encodeHeader(h.Tags)
+	if res := check(t, assemble(p, digestTags(p.Header)), Options{HeaderOnly: true}); len(res.Problems) != 0 {
+		t.Errorf("problems %q", res.Problems)
+	}
+}
+
+// rpm 4 and later refuse a main header with no immutable region, which is
+// what an rpm v3 package has: every EL release fails it with "hdr load: BAD".
+func TestAV3PackageIsRefused(t *testing.T) {
+	p := split(t, helloRPM(t))
+	h, err := rpm.ParseHeader(p.Header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(h.Tags, 63)
+	p.Header = encodeHeader(h.Tags)
+	res := check(t, assemble(p, digestTags(p.Header)), Options{HeaderOnly: true})
+	if !strings.Contains(strings.Join(res.Problems, "\n"), "no immutable region") {
+		t.Errorf("problems %q; want the missing region reported", res.Problems)
+	}
+}
+
+// withRequire adds a dependency to the package's requires arrays.
+func withRequire(t *testing.T, name string, flags int64, version string) []byte {
+	t.Helper()
+	p := split(t, helloRPM(t))
+	h, err := rpm.ParseHeader(p.Header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.GetTag(1048).Value = append(slices.Clone(h.GetTag(1048).Int64Slice()), flags)
+	h.GetTag(1049).Value = append(slices.Clone(h.GetTag(1049).StringSlice()), name)
+	h.GetTag(1050).Value = append(slices.Clone(h.GetTag(1050).StringSlice()), version)
+	p.Header = encodeHeader(h.Tags)
+	return assemble(p, digestTags(p.Header))
+}
+
+// rpm refuses a package needing an rpmlib() feature it does not provide
+// ("rpmlib(X) is needed by ..."), measured on RHEL 8, 9 and 10.
+func TestRPMLibRequirementsAreJudgedPerRelease(t *testing.T) {
+	const lessEq = int64(rpm.DepFlagLesserOrEqual)
+	const greaterEq = int64(rpm.DepFlagGreaterOrEqual)
+	for _, tc := range []struct {
+		name, target, req, version string
+		flags                      int64
+		want                       string
+	}{
+		{"unknown feature", "rhel9", "rpmlib(FutureFeature)", "9.0-1", lessEq, "does not provide"},
+		{"newer version", "rhel8", "rpmlib(PayloadIsZstd)", "99.0-1", greaterEq, "provides rpmlib(PayloadIsZstd) = 5.4.18-1"},
+		{"satisfied", "rhel8", "rpmlib(PayloadIsZstd)", "5.4.18-1", lessEq, ""},
+		{"only source packages need it", "rhel8", "rpmlib(DynamicBuildRequires)", "4.15.0-1", lessEq, "does not provide"},
+		{"source feature on rhel9", "rhel9", "rpmlib(DynamicBuildRequires)", "4.15.0-1", lessEq, ""},
+		{"unversioned", "rhel10", "rpmlib(RichDependencies)", "", 0, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := check(t, withRequire(t, tc.req, tc.flags, tc.version), Options{Policy: policy(t, tc.target), HeaderOnly: true})
+			got := strings.Join(res.Incompatible, "\n")
+			if tc.want == "" && got != "" || !strings.Contains(got, tc.want) {
+				t.Errorf("incompatible = %q, want %q", got, tc.want)
+			}
+			if len(res.Problems) != 0 {
+				t.Errorf("problems %q", res.Problems)
+			}
+		})
+	}
+}
+
 func TestDetachedSignatures(t *testing.T) {
 	e := signingKey(t)
 	data := []byte("<repomd/>\n")
